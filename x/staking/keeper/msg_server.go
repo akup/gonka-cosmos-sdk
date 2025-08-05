@@ -21,6 +21,28 @@ import (
 	"github.com/cosmos/cosmos-sdk/x/staking/types"
 )
 
+// safeValidatePublicKey safely validates any public key type to ensure it won't cause panics
+// when used with sdk.GetConsAddress or other operations
+func safeValidatePublicKey(pk cryptotypes.PubKey) error {
+	if pk == nil {
+		return errorsmod.Wrap(sdkerrors.ErrInvalidPubKey, "public key cannot be nil")
+	}
+
+	var err error
+
+	// Use panic recovery to catch any panics from the Address() method
+	defer func() {
+		if r := recover(); r != nil {
+			err = errorsmod.Wrapf(sdkerrors.ErrInvalidPubKey, "invalid public key format: %v", r)
+		}
+	}()
+
+	// Test that the key works by calling Address() - this is where panics occur with invalid keys
+	_ = pk.Address()
+
+	return err
+}
+
 type msgServer struct {
 	*Keeper
 }
@@ -61,6 +83,11 @@ func (k msgServer) CreateValidator(ctx context.Context, msg *types.MsgCreateVali
 	pk, ok := msg.Pubkey.GetCachedValue().(cryptotypes.PubKey)
 	if !ok {
 		return nil, errorsmod.Wrapf(sdkerrors.ErrInvalidType, "Expecting cryptotypes.PubKey, got %T", pk)
+	}
+
+	// Validate the public key to ensure it won't cause panics
+	if err := safeValidatePublicKey(pk); err != nil {
+		return nil, err
 	}
 
 	if _, err := k.GetValidatorByConsAddr(ctx, sdk.GetConsAddress(pk)); err == nil {
