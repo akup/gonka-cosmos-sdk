@@ -16,10 +16,21 @@ import (
 // data. Finally, it updates the bonded validators.
 // Returns final validator set after applying all declaration and delegations
 func (k Keeper) InitGenesis(ctx context.Context, data *types.GenesisState) (res []abci.ValidatorUpdate) {
-	// check if the module account exists
-	moduleAcc := k.authKeeper.GetModuleAccount(ctx, types.ModuleName)
-	if moduleAcc == nil {
-		panic(fmt.Sprintf("%s module account has not been set", types.ModuleName))
+	// set module accounts
+	bondedPool := k.GetBondedPool(ctx)
+	if bondedPool == nil {
+		panic(fmt.Sprintf("%s module account has not been set", types.BondedPoolName))
+	}
+	if k.bankKeeper.GetAllBalances(ctx, bondedPool.GetAddress()).IsZero() {
+		k.authKeeper.SetModuleAccount(ctx, bondedPool)
+	}
+
+	notBondedPool := k.GetNotBondedPool(ctx)
+	if notBondedPool == nil {
+		panic(fmt.Sprintf("%s module account has not been set", types.NotBondedPoolName))
+	}
+	if k.bankKeeper.GetAllBalances(ctx, notBondedPool.GetAddress()).IsZero() {
+		k.authKeeper.SetModuleAccount(ctx, notBondedPool)
 	}
 
 	if err := k.SetParams(ctx, data.Params); err != nil {
