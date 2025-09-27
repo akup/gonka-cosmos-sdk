@@ -105,7 +105,6 @@ func (k Keeper) SetComputeValidators(ctx context.Context, computeResults []Compu
 }
 
 // createValidatorImmediate creates, bonds, and self-delegates for a new validator.
-// The power parameter represents both the desired consensus power AND the token amount (1:1 mapping).
 func (k Keeper) createValidatorImmediate(ctx context.Context, operatorAddress string, pubkey cryptotypes.PubKey, power math.Int) error {
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
 	logger := k.Logger(sdkCtx)
@@ -123,8 +122,6 @@ func (k Keeper) createValidatorImmediate(ctx context.Context, operatorAddress st
 		return err
 	}
 	validator.Status = types.Bonded // Set as bonded immediately
-
-	// Direct 1:1 mapping: tokens = consensus power
 	validator.Tokens = power
 	validator.DelegatorShares = math.LegacyNewDecFromInt(power)
 
@@ -183,7 +180,7 @@ func (k Keeper) updateValidatorPowerImmediate(ctx context.Context, validator typ
 		return err
 	}
 
-	// Direct 1:1 mapping: tokens = consensus power
+	// Update tokens and shares
 	validator.Tokens = newPower
 	validator.DelegatorShares = math.LegacyNewDecFromInt(newPower)
 	validator.Status = types.Bonded // Ensure validator is bonded
