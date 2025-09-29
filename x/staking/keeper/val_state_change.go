@@ -3,6 +3,7 @@ package keeper
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -128,82 +129,117 @@ func (k Keeper) BlockValidatorUpdates(ctx context.Context) ([]abci.ValidatorUpda
 // at the previous block height or were removed from the validator set entirely
 // are returned to CometBFT.
 func (k Keeper) ApplyAndReturnValidatorSetUpdates(ctx context.Context) (updates []abci.ValidatorUpdate, err error) {
-	k.Logger(ctx).Info("applying proof-of-compute validator set updates")
+	k.Logger(ctx).Info("applying validator set updates")
+	params, err := k.GetParams(ctx)
+	if err != nil {
+		return nil, err
+	}
+	maxValidators := params.MaxValidators
 	powerReduction := k.PowerReduction(ctx)
 	totalPower := math.ZeroInt()
+	amtFromBondedToNotBonded := math.ZeroInt()
 
-	// Retrieve the last validator set that CometBFT knows about.
+	// Retrieve the last validator set.
+	// The persistent set is updated later in this function.
+	// (see LastValidatorPowerKey).
 	last, err := k.getLastValidatorsByAddr(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get last validator set: %w", err)
 	}
 
-	// Retrieve the current validator set from the state.
-	currentValidators, err := k.GetAllValidators(ctx)
+	// Iterate over validators, highest power to lowest.
+	iterator, err := k.ValidatorsPowerStoreIterator(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get all validators: %w", err)
+		return nil, fmt.Errorf("failed to get validators power store iterator: %w", err)
 	}
+	defer iterator.Close()
 
-	for _, validator := range currentValidators {
-		// only bonded validators are considered part of the active set
-		if !validator.IsBonded() {
+	for count := 0; iterator.Valid() && count < int(maxValidators); iterator.Next() {
+		// everything that is iterated in this loop is becoming or already a
+		// part of the bonded validator set
+		valAddr := sdk.ValAddress(iterator.Value())
+		validator, err := k.GetValidator(ctx, valAddr)
+		if err != nil {
+			return nil, fmt.Errorf("validator record not found for address: %X", valAddr)
+		}
+		k.Logger(ctx).Info("iterating validator", "validator", validator.String(), "power", validator.Tokens, "status", validator.Status)
+
+		if validator.Jailed {
+			return nil, errors.New("should never retrieve a jailed validator from the power store")
+		}
+
+		if validator.GetTokens() == math.ZeroInt() {
+			k.Logger(ctx).Info("validator has zero weight", "validator", validator.String(), "power", "status", validator.Status)
 			continue
 		}
 
-		valAddr, err := k.validatorAddressCodec.StringToBytes(validator.GetOperator())
-		if err != nil {
-			return nil, fmt.Errorf("failed to get validator operator address: %w", err)
-		}
 		valAddrStr := string(valAddr)
-
-		newPower := validator.ConsensusPower(powerReduction)
-		totalPower = totalPower.AddRaw(newPower)
-
+		// fetch the old power bytes
 		oldPower, found := last[valAddrStr]
+		newPower := validator.ConsensusPower(powerReduction)
 
-		// update the validator set if power has changed or the validator is new
+		// update the validator set if power has changed
 		if !found || oldPower != newPower {
 			updates = append(updates, validator.ABCIValidatorUpdate(powerReduction))
-			k.Logger(ctx).Info("validator update", "operator", validator.OperatorAddress, "old_power", oldPower, "new_power", newPower)
 
 			if err = k.SetLastValidatorPower(ctx, valAddr, newPower); err != nil {
 				return nil, err
 			}
 		}
 
-		// remove from the `last` map; remaining entries will be validators that are no longer bonded
 		delete(last, valAddrStr)
+		count++
+
+		totalPower = totalPower.AddRaw(newPower)
 	}
 
-	// Any validators remaining in `last` were bonded in the previous block but are not in the current bonded set.
-	// We must inform CometBFT to remove them.
 	noLongerBonded, err := sortNoLongerBonded(last, k.validatorAddressCodec)
 	if err != nil {
 		return nil, err
 	}
 
 	for _, valAddrBytes := range noLongerBonded {
-		// To create the removal update, we need the validator's public key.
-		// We attempt to retrieve the full validator object from the state.
 		validator, err := k.GetValidator(ctx, sdk.ValAddress(valAddrBytes))
 		if err != nil {
-			// IMPORTANT: If this error occurs, it means `removeValidatorImmediate` deleted the validator
-			// from the state before this function could create the zero-power update for CometBFT.
-			// The `removeValidatorImmediate` function must be modified to ensure the validator record
-			// persists until after this update is processed. It should transition the validator to
-			// an 'Unbonded' state with zero power instead of deleting it.
-			k.Logger(ctx).Error("could not retrieve validator for removal update; consensus may desync", "address", sdk.ValAddress(valAddrBytes).String(), "error", err)
-			// We skip this update, which is incorrect but prevents a panic.
-			continue
+			return nil, fmt.Errorf("validator record not found for address: %X", sdk.ValAddress(valAddrBytes))
 		}
-
-		updates = append(updates, validator.ABCIValidatorUpdateZero())
-		k.Logger(ctx).Info("removing validator from consensus set", "operator", validator.OperatorAddress)
-
-		if err = k.DeleteLastValidatorPower(ctx, valAddrBytes); err != nil {
+		validator, err = k.bondedToUnbonding(ctx, validator)
+		if err != nil {
 			return nil, err
 		}
+		str, err := k.validatorAddressCodec.StringToBytes(validator.GetOperator())
+		if err != nil {
+			return nil, fmt.Errorf("failed to get validator operator address: %w", err)
+		}
+		amtFromBondedToNotBonded = amtFromBondedToNotBonded.Add(validator.GetTokens())
+		if err = k.DeleteLastValidatorPower(ctx, str); err != nil {
+			return nil, err
+		}
+		k.Logger(ctx).Info("removing validator", "validator", validator.String(), "power", validator.Tokens, "status", validator.Status)
+
+		updates = append(updates, validator.ABCIValidatorUpdateZero())
 	}
+
+	// REMOVED: Since we are not staking coins anymore, but instead using coins as a proxy for
+	// compute power, this would cause us to move money that isn't there!
+	// Update the pools based on the recent updates in the validator set:
+	// - The tokens from the non-bonded candidates that enter the new validator set need to be transferred
+	// to the Bonded pool.
+	// - The tokens from the bonded validators that are being kicked out from the validator set
+	// need to be transferred to the NotBonded pool.
+	//switch {
+	//// Compare and subtract the respective amounts to only perform one transfer.
+	//// This is done in order to avoid doing multiple updates inside each iterator/loop.
+	//case amtFromNotBondedToBonded.GT(amtFromBondedToNotBonded):
+	//	if err = k.notBondedTokensToBonded(ctx, amtFromNotBondedToBonded.Sub(amtFromBondedToNotBonded)); err != nil {
+	//		return nil, err
+	//	}
+	//case amtFromNotBondedToBonded.LT(amtFromBondedToNotBonded):
+	//	if err = k.bondedTokensToNotBonded(ctx, amtFromBondedToNotBonded.Sub(amtFromNotBondedToBonded)); err != nil {
+	//		return nil, err
+	//	}
+	//default: // equal amounts of tokens; no update required
+	//}
 
 	// set total power on lookup index if there are any updates
 	if len(updates) > 0 {
@@ -212,12 +248,15 @@ func (k Keeper) ApplyAndReturnValidatorSetUpdates(ctx context.Context) (updates 
 		}
 	}
 
-	// set the list of validator updates, which will be returned by EndBlocker
+	// set the list of validator updates
 	if err = k.SetValidatorUpdates(ctx, updates); err != nil {
 		return nil, err
 	}
 
-	return updates, nil
+	for _, update := range updates {
+		k.Logger(ctx).Info("final:validator update", "power", update.Power, "pubKey", update.PubKey)
+	}
+	return updates, err
 }
 
 // Validator state transitions
