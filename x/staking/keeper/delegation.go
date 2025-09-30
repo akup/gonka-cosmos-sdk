@@ -810,10 +810,17 @@ func (k Keeper) DequeueAllMatureRedelegationQueue(ctx context.Context, currTime 
 
 // Delegate performs a delegation, set/update everything necessary within the store.
 // tokenSrc indicates the bond status of the incoming funds.
+// PROOF OF COMPUTE: Only allowed during genesis (block height <= 1). After genesis, validator power
+// can only be set via SetComputeValidators to prevent bypassing compute-based validation.
 func (k Keeper) Delegate(
 	ctx context.Context, delAddr sdk.AccAddress, bondAmt math.Int, tokenSrc types.BondStatus,
 	validator types.Validator, subtractAccount bool,
 ) (newShares math.LegacyDec, err error) {
+	sdkCtx := sdk.UnwrapSDKContext(ctx)
+	if sdkCtx.BlockHeight() > 1 {
+		return math.LegacyZeroDec(), fmt.Errorf("Delegate is disabled after genesis in Proof of Compute mode")
+	}
+
 	// In some situations, the exchange rate becomes invalid, e.g. if
 	// Validator loses all tokens due to slashing. In this case,
 	// make all future delegations invalid.
