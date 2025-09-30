@@ -137,7 +137,7 @@ func (k Keeper) ApplyAndReturnValidatorSetUpdates(ctx context.Context) (updates 
 	maxValidators := params.MaxValidators
 	powerReduction := k.PowerReduction(ctx)
 	totalPower := math.ZeroInt()
-	amtFromBondedToNotBonded := math.ZeroInt()
+	amtFromBondedToNotBonded, amtFromNotBondedToBonded := math.ZeroInt(), math.ZeroInt()
 
 	// Retrieve the last validator set.
 	// The persistent set is updated later in this function.
@@ -168,9 +168,33 @@ func (k Keeper) ApplyAndReturnValidatorSetUpdates(ctx context.Context) (updates 
 			return nil, errors.New("should never retrieve a jailed validator from the power store")
 		}
 
-		if validator.GetTokens() == math.ZeroInt() {
-			k.Logger(ctx).Info("validator has zero weight", "validator", validator.String(), "power", "status", validator.Status)
-			continue
+		// if we get to a zero-power validator (which we don't bond),
+		// there are no more possible bonded validators
+		if validator.PotentialConsensusPower(k.PowerReduction(ctx)) == 0 {
+			k.Logger(ctx).Info("validator has zero power", "reduction", k.PowerReduction(ctx), "power", validator.PotentialConsensusPower(k.PowerReduction(ctx)))
+			break
+		}
+
+		// apply the appropriate state change if necessary
+		switch {
+		case validator.IsUnbonded():
+			k.Logger(ctx).Info("moving unbonded to bonded", "reduction", k.PowerReduction(ctx), "power", validator.PotentialConsensusPower(k.PowerReduction(ctx)))
+			validator, err = k.unbondedToBonded(ctx, validator)
+			if err != nil {
+				return nil, err
+			}
+			amtFromNotBondedToBonded = amtFromNotBondedToBonded.Add(validator.GetTokens())
+		case validator.IsUnbonding():
+			k.Logger(ctx).Info("moving unbonding to bonded", "reduction", k.PowerReduction(ctx), "power", validator.PotentialConsensusPower(k.PowerReduction(ctx)))
+			validator, err = k.unbondingToBonded(ctx, validator)
+			if err != nil {
+				return nil, err
+			}
+			amtFromNotBondedToBonded = amtFromNotBondedToBonded.Add(validator.GetTokens())
+		case validator.IsBonded():
+			// no state change
+		default:
+			return nil, errors.New("unexpected validator status")
 		}
 
 		valAddrStr := string(valAddr)

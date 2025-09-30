@@ -153,8 +153,7 @@ func (h Hooks) BeforeDelegationSharesModified(ctx context.Context, delAddr sdk.A
 
 // create new delegation period record
 func (h Hooks) AfterDelegationModified(ctx context.Context, delAddr sdk.AccAddress, valAddr sdk.ValAddress) error {
-	// Original logic withdraws rewards. We can just return nil.
-	return nil
+	return h.k.initializeDelegation(ctx, valAddr, delAddr)
 }
 
 // record the slash event

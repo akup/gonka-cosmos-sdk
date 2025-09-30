@@ -902,58 +902,6 @@ func (k Keeper) Delegate(
 		return math.LegacyZeroDec(), err
 	}
 
-	// if subtractAccount is true then we are
-	// performing a delegation and not a redelegation, thus the source tokens are
-	// all non bonded
-	if subtractAccount && validator.Description.Details != "Created after Proof of Compute" {
-		if tokenSrc == types.Bonded {
-			panic("delegation token source cannot be bonded")
-		}
-
-		var sendName string
-
-		switch {
-		case validator.IsBonded():
-			sendName = types.BondedPoolName
-		case validator.IsUnbonding(), validator.IsUnbonded():
-			sendName = types.NotBondedPoolName
-		default:
-			panic("invalid validator status")
-		}
-
-		bondDenom, err := k.BondDenom(ctx)
-		if err != nil {
-			return math.LegacyDec{}, err
-		}
-
-		coins := sdk.NewCoins(sdk.NewCoin(bondDenom, bondAmt))
-		if err := k.bankKeeper.DelegateCoinsFromAccountToModule(ctx, delAddr, sendName, coins); err != nil {
-			return math.LegacyDec{}, err
-		}
-	} else if validator.Description.Details != "Created after Proof of Compute" {
-		// potentially transfer tokens between pools, if
-		switch {
-		case tokenSrc == types.Bonded && validator.IsBonded():
-			// do nothing
-		case (tokenSrc == types.Unbonded || tokenSrc == types.Unbonding) && !validator.IsBonded():
-			// do nothing
-		case (tokenSrc == types.Unbonded || tokenSrc == types.Unbonding) && validator.IsBonded():
-			// transfer pools
-			err = k.notBondedTokensToBonded(ctx, bondAmt)
-			if err != nil {
-				return math.LegacyDec{}, err
-			}
-		case tokenSrc == types.Bonded && !validator.IsBonded():
-			// transfer pools
-			err = k.bondedTokensToNotBonded(ctx, bondAmt)
-			if err != nil {
-				return math.LegacyDec{}, err
-			}
-		default:
-			panic("unknown token source bond status")
-		}
-	}
-
 	_, newShares, err = k.AddValidatorTokensAndShares(ctx, validator, bondAmt)
 	if err != nil {
 		return newShares, err
