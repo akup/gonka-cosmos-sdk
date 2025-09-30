@@ -3,8 +3,8 @@ package keeper
 import (
 	"context"
 	"slices"
-	"time"
 
+	"cosmossdk.io/errors"
 	errorsmod "cosmossdk.io/errors"
 
 	cryptotypes "github.com/cosmos/cosmos-sdk/crypto/types"
@@ -50,6 +50,11 @@ var _ types.MsgServer = msgServer{}
 
 // CreateValidator defines a method for creating a new validator
 func (k msgServer) CreateValidator(ctx context.Context, msg *types.MsgCreateValidator) (*types.MsgCreateValidatorResponse, error) {
+	sdkCtx := sdk.UnwrapSDKContext(ctx)
+	if sdkCtx.BlockHeight() > 1 {
+		return nil, errorsmod.Wrap(sdkerrors.ErrInvalidRequest, "MsgCreateValidator is disabled after genesis")
+	}
+
 	valAddr, err := k.validatorAddressCodec.StringToBytes(msg.ValidatorAddress)
 	if err != nil {
 		return nil, sdkerrors.ErrInvalidAddress.Wrapf("invalid validator address: %s", err)
@@ -100,11 +105,6 @@ func (k msgServer) CreateValidator(ctx context.Context, msg *types.MsgCreateVali
 
 	if _, err := msg.Description.EnsureLength(); err != nil {
 		return nil, err
-	}
-
-	sdkCtx := sdk.UnwrapSDKContext(ctx)
-	if sdkCtx.BlockHeight() > 1 {
-		return nil, errorsmod.Wrap(sdkerrors.ErrInvalidRequest, "MsgCreateValidator is disabled after genesis")
 	}
 
 	cp := sdkCtx.ConsensusParams()
@@ -226,36 +226,25 @@ func (k msgServer) EditValidator(ctx context.Context, msg *types.MsgEditValidato
 // Delegate defines a method for performing a delegation of coins from a delegator to a validator
 func (k msgServer) Delegate(ctx context.Context, msg *types.MsgDelegate) (*types.MsgDelegateResponse, error) {
 	// No-op implementation for proof of compute - just return success without doing anything
-	return &types.MsgDelegateResponse{}, nil
+	return nil, errors.Wrapf(sdkerrors.ErrInvalidRequest, "Delegate is disabled")
 }
 
 // BeginRedelegate defines a method for performing a redelegation of coins from a source validator to a destination validator of given delegator
 func (k msgServer) BeginRedelegate(ctx context.Context, msg *types.MsgBeginRedelegate) (*types.MsgBeginRedelegateResponse, error) {
 	// No-op implementation for proof of compute - just return success without doing anything
-	return &types.MsgBeginRedelegateResponse{
-		CompletionTime: time.Now(),
-	}, nil
+	return nil, errors.Wrapf(sdkerrors.ErrInvalidRequest, "BeginRedelegate is disabled")
 }
 
 // Undelegate defines a method for performing an undelegation from a delegate and a validator
 func (k msgServer) Undelegate(ctx context.Context, msg *types.MsgUndelegate) (*types.MsgUndelegateResponse, error) {
-	// No-op implementation for proof of compute - just return success without doing anything
-	bondDenom, err := k.BondDenom(ctx)
-	if err != nil {
-		bondDenom = "stake" // fallback
-	}
-
-	return &types.MsgUndelegateResponse{
-		CompletionTime: time.Now(),
-		Amount:         sdk.NewCoin(bondDenom, msg.Amount.Amount),
-	}, nil
+	return nil, errors.Wrapf(sdkerrors.ErrInvalidRequest, "Undelegate is disabled")
 }
 
 // CancelUnbondingDelegation defines a method for canceling the unbonding delegation
 // and delegate back to the validator.
 func (k msgServer) CancelUnbondingDelegation(ctx context.Context, msg *types.MsgCancelUnbondingDelegation) (*types.MsgCancelUnbondingDelegationResponse, error) {
 	// No-op implementation for proof of compute - just return success without doing anything
-	return &types.MsgCancelUnbondingDelegationResponse{}, nil
+	return nil, errors.Wrapf(sdkerrors.ErrInvalidRequest, "CancelUnbondingDelegation is disabled")
 }
 
 // UpdateParams defines a method to perform updation of params exist in x/staking module.

@@ -1056,51 +1056,7 @@ func (k Keeper) getBeginInfo(
 func (k Keeper) Undelegate(
 	ctx context.Context, delAddr sdk.AccAddress, valAddr sdk.ValAddress, sharesAmount math.LegacyDec,
 ) (time.Time, math.Int, error) {
-	validator, err := k.GetValidator(ctx, valAddr)
-	if err != nil {
-		return time.Time{}, math.Int{}, err
-	}
-
-	hasMaxEntries, err := k.HasMaxUnbondingDelegationEntries(ctx, delAddr, valAddr)
-	if err != nil {
-		return time.Time{}, math.Int{}, err
-	}
-
-	if hasMaxEntries {
-		return time.Time{}, math.Int{}, types.ErrMaxUnbondingDelegationEntries
-	}
-
-	returnAmount, err := k.Unbond(ctx, delAddr, valAddr, sharesAmount)
-	if err != nil {
-		return time.Time{}, math.Int{}, err
-	}
-
-	// transfer the validator tokens to the not bonded pool
-	if validator.IsBonded() {
-		err = k.bondedTokensToNotBonded(ctx, returnAmount)
-		if err != nil {
-			return time.Time{}, math.Int{}, err
-		}
-	}
-
-	unbondingTime, err := k.UnbondingTime(ctx)
-	if err != nil {
-		return time.Time{}, math.Int{}, err
-	}
-
-	sdkCtx := sdk.UnwrapSDKContext(ctx)
-	completionTime := sdkCtx.BlockHeader().Time.Add(unbondingTime)
-	ubd, err := k.SetUnbondingDelegationEntry(ctx, delAddr, valAddr, sdkCtx.BlockHeight(), completionTime, returnAmount)
-	if err != nil {
-		return time.Time{}, math.Int{}, err
-	}
-
-	err = k.InsertUBDQueue(ctx, ubd, completionTime)
-	if err != nil {
-		return time.Time{}, math.Int{}, err
-	}
-
-	return completionTime, returnAmount, nil
+	return time.Time{}, math.LegacyZeroDec().RoundInt(), nil
 }
 
 // CompleteUnbonding completes the unbonding of all mature entries in the
