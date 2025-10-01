@@ -2,187 +2,257 @@ package keeper
 
 import (
 	"context"
+	"fmt"
 
 	"cosmossdk.io/math"
+
 	cryptotypes "github.com/cosmos/cosmos-sdk/crypto/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/x/staking/types"
 )
 
+// ComputeResult defines the structure for validator power updates.
 type ComputeResult struct {
 	Power           int64
 	ValidatorPubKey cryptotypes.PubKey
 	OperatorAddress string
 }
 
+// SetComputeValidators is the main entry point for updating the validator set.
+// It synchronizes the state with the provided list of compute results.
 func (k Keeper) SetComputeValidators(ctx context.Context, computeResults []ComputeResult) ([]types.Validator, error) {
-	server := NewMsgServerImpl(&k)
-	logger := k.Logger(ctx)
+	sdkCtx := sdk.UnwrapSDKContext(ctx)
+	logger := k.Logger(sdkCtx)
+
 	resultsMap := make(map[string]ComputeResult)
-	totalBonded := 0
-	for _, result := range computeResults {
-		resultsMap[result.ValidatorPubKey.String()] = result
+	for _, res := range computeResults {
+		if res.ValidatorPubKey == nil {
+			continue
+		}
+		resultsMap[res.OperatorAddress] = res
 	}
 
 	currentValidators, err := k.GetAllValidators(ctx)
 	if err != nil {
-		logger.Error("error getting current validators", "error", err.Error())
+		logger.Error("failed to get all validators", "error", err)
 		return nil, err
 	}
 
-	validatorsAlreadyExisting := make(map[string]bool)
-	for _, validator := range currentValidators {
-		conPubKey, err := validator.ConsPubKey()
-		if err != nil {
-			logger.Error("Error getting cons pubkey", "error", err.Error())
-			return nil, err
-		}
-		validatorsAlreadyExisting[conPubKey.String()] = true
+	currentValMap := make(map[string]types.Validator)
+	for _, val := range currentValidators {
+		currentValMap[val.OperatorAddress] = val
 	}
 
-	// Handle validators already in
-	for _, validator := range currentValidators {
-		conPubKey, err := validator.ConsPubKey()
-		if err != nil {
-			logger.Error("Error getting cons pubkey", "error", err.Error())
-			return nil, err
-		}
-		computeResult, inNewResults := resultsMap[conPubKey.String()]
-		if inNewResults {
-			logger.Info("Updating validator", "operator", validator.GetOperator(), "power", computeResult.Power)
-			err := k.setValidatorPower(ctx, validator, computeResult.Power)
-			if err != nil {
-				return nil, err
-			}
-			totalBonded += int(computeResult.Power)
-		} else {
-			logger.Info("Removing validator", "operator", validator.GetOperator(), "power", computeResult.Power)
-			err := k.setValidatorPower(ctx, validator, 0)
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
-	// Handle validators not in
-	for _, computeResult := range computeResults {
-		if computeResult.Power == 0 {
-			logger.Warn("Power is 0 for new validator, skipping validator", "address", computeResult.OperatorAddress, "key", computeResult.ValidatorPubKey.String())
+	for pubKeyAddr, result := range resultsMap {
+		val, found := currentValMap[pubKeyAddr]
+
+		power := math.NewInt(result.Power)
+		if power.IsNegative() {
+			logger.Info("skipping validator with negative power", "pubkey", result.ValidatorPubKey.Address())
 			continue
 		}
-		if _, ok := validatorsAlreadyExisting[computeResult.ValidatorPubKey.String()]; !ok {
-			logger.Info("Creating validator", "power", computeResult, "operator", computeResult.OperatorAddress)
-			newVal, err := k.createValidator(ctx, computeResult, server)
-			if err != nil {
-				logger.Error("Error creating validator", "error", err.Error())
-				return nil, err
+
+		if !found {
+			if power.IsZero() {
+				continue
 			}
-			err = k.delegateResult(ctx, computeResult, newVal.OperatorAddress)
-			if err != nil {
-				logger.Error("Error delegating result", "error", err.Error())
-				return nil, err
+			logger.Info("creating new validator", "pubkey", result.ValidatorPubKey.Address(), "power", power)
+			if err := k.createValidatorImmediate(ctx, result.OperatorAddress, result.ValidatorPubKey, power); err != nil {
+				logger.Error("failed to create validator", "pubkey", result.ValidatorPubKey.Address(), "error", err)
 			}
-			totalBonded += int(computeResult.Power)
+		} else {
+			if val.Tokens == power && val.IsBonded() && !val.Jailed {
+				continue
+			}
+
+			if power.IsZero() {
+				// Power is zero, so remove the validator
+				logger.Info("removing validator with zero power", "operator", val.OperatorAddress)
+				if err := k.removeValidator(ctx, val); err != nil {
+					logger.Error("failed to remove validator", "operator", val.OperatorAddress, "error", err)
+				}
+			} else {
+				logger.Info("updating validator power", "operator", val.OperatorAddress, "new_power", power)
+				if err := k.updateValidatorPower(ctx, val, power); err != nil {
+					logger.Error("failed to update validator power", "operator", val.OperatorAddress, "error", err)
+				}
+			}
 		}
 	}
+
+	// Remove validators that are no longer in the compute results
+	for consAddrStr, val := range currentValMap {
+		if _, exists := resultsMap[consAddrStr]; !exists {
+			logger.Info("removing validator no longer in compute results", "operator", val.OperatorAddress)
+			if err := k.removeValidator(ctx, val); err != nil {
+				logger.Error("failed to remove stale validator", "operator", val.OperatorAddress, "error", err)
+			}
+		}
+	}
+
 	return k.GetAllValidators(ctx)
 }
 
-func (k Keeper) setValidatorPower(ctx context.Context, validator types.Validator, power int64) error {
-	logger := k.Logger(ctx)
-	err := k.DeleteValidatorByPowerIndex(ctx, validator)
+// createValidatorImmediate creates and bonds a new validator.
+func (k Keeper) createValidatorImmediate(ctx context.Context, operatorAddress string, pubkey cryptotypes.PubKey, power math.Int) error {
+	sdkCtx := sdk.UnwrapSDKContext(ctx)
+	logger := k.Logger(sdkCtx)
+
+	valAddr, err := k.ValidatorAddressCodec().StringToBytes(operatorAddress)
 	if err != nil {
-		logger.Error("Error deleting validator by power index", "error", err.Error())
+		logger.Error("failed to convert operator address to bytes", "address", operatorAddress, "error", err)
+		return fmt.Errorf("invalid operator address %s: %w", operatorAddress, err)
+	}
+
+	// Create the validator object
+	validator, err := types.NewValidator(operatorAddress, pubkey, types.Description{Moniker: operatorAddress})
+	if err != nil {
+		logger.Error("failed to create new validator", "operator", operatorAddress, "error", err)
+		return err
+	}
+	validator.Status = types.Bonded // Set as bonded immediately
+	validator.Tokens = power
+	validator.DelegatorShares = math.LegacyNewDecFromInt(power)
+
+	// Save validator to store
+	if err := k.SetValidator(ctx, validator); err != nil {
+		logger.Error("failed to set validator", "operator", operatorAddress, "error", err)
+		return err
+	}
+	if err := k.SetValidatorByConsAddr(ctx, validator); err != nil {
+		logger.Error("failed to set validator by cons addr", "operator", operatorAddress, "error", err)
+		return err
+	}
+	if err := k.SetValidatorByPowerIndex(ctx, validator); err != nil {
+		logger.Error("failed to set validator by power index", "operator", operatorAddress, "error", err)
 		return err
 	}
 
-	validator.Tokens = math.NewInt(power)
-	err = k.SetValidator(ctx, validator)
-	if err != nil {
-		logger.Error("Error setting validator", "error", err.Error())
+	// Create self-delegation (needed for module compatibility even if distribution is disabled)
+	delegator := sdk.AccAddress(valAddr)
+	delegation := types.NewDelegation(delegator.String(), operatorAddress, math.LegacyNewDecFromInt(power))
+	if err := k.SetDelegation(ctx, delegation); err != nil {
+		logger.Error("failed to set delegation", "delegator", delegator.String(), "validator", operatorAddress, "error", err)
 		return err
 	}
-	err = k.SetValidatorByPowerIndex(ctx, validator)
-	if err != nil {
-		logger.Error("Error setting validator by power index", "error", err.Error())
+
+	if err := k.Hooks().AfterValidatorCreated(ctx, valAddr); err != nil {
+		logger.Error("failed to call AfterValidatorCreated hook", "validator", operatorAddress, "error", err)
 		return err
 	}
+	consAddr, err := validator.GetConsAddr()
+	if err != nil {
+		logger.Error("failed to get validator cons addr", "validator", operatorAddress, "error", err)
+		return err
+	}
+	if err := k.Hooks().AfterValidatorBonded(ctx, consAddr, valAddr); err != nil {
+		logger.Error("failed to call AfterValidatorBonded hook", "validator", operatorAddress, "error", err)
+		return err
+	}
+
+	if err := k.Hooks().AfterDelegationModified(ctx, delegator, valAddr); err != nil {
+		logger.Error("failed to call AfterDelegationModified hook", "delegator", delegator.String(), "validator", operatorAddress, "error", err)
+		return err
+	}
+
 	return nil
 }
 
-func (k Keeper) delegateResult(ctx context.Context, computeResult ComputeResult, validatorAddress string) error {
-	// Note: computeResult.OperatorAddress is the operator address of the validator
-	valAddr, err := sdk.ValAddressFromBech32(computeResult.OperatorAddress)
-	if err != nil {
-		k.Logger(ctx).Error("Error parsing operator address", "address", computeResult.OperatorAddress, "error", err)
+// updateValidatorPower updates an existing validator's power.
+func (k Keeper) updateValidatorPower(ctx context.Context, validator types.Validator, newPower math.Int) error {
+	sdkCtx := sdk.UnwrapSDKContext(ctx)
+	logger := k.Logger(sdkCtx)
+
+	if err := k.DeleteValidatorByPowerIndex(ctx, validator); err != nil {
+		logger.Error("failed to delete validator by power index", "validator", validator.OperatorAddress, "error", err)
 		return err
 	}
 
-	delegatorAccountAddress := sdk.AccAddress(valAddr)
+	validator.Tokens = newPower
+	validator.DelegatorShares = math.LegacyNewDecFromInt(newPower)
+	validator.Status = types.Bonded // Ensure validator is bonded
+	validator.Jailed = false        // Unjail if it was jailed
 
-	delegation := types.Delegation{
-		DelegatorAddress: delegatorAccountAddress.String(),
-		ValidatorAddress: validatorAddress,
+	if err := k.SetValidator(ctx, validator); err != nil {
+		logger.Error("failed to set validator for power update", "validator", validator.OperatorAddress, "error", err)
+		return err
 	}
-
-	delegation.Shares = math.LegacyNewDec(computeResult.Power)
-	err = k.SetDelegation(ctx, delegation)
-	if err != nil {
-		k.Logger(ctx).Error("Error setting delegation", "error", err.Error())
+	if err := k.SetValidatorByPowerIndex(ctx, validator); err != nil {
+		logger.Error("failed to set validator by power index for power update", "validator", validator.OperatorAddress, "error", err)
 		return err
 	}
 
-	return err
+	valAddr, err := k.ValidatorAddressCodec().StringToBytes(validator.OperatorAddress)
+	if err != nil {
+		logger.Error("failed to convert operator address for delegation update", "address", validator.OperatorAddress, "error", err)
+		return err
+	}
+	delegator := sdk.AccAddress(valAddr)
+	delegation, err := k.GetDelegation(ctx, delegator, valAddr)
+	if err != nil {
+		delegation = types.NewDelegation(delegator.String(), validator.OperatorAddress, math.LegacyNewDecFromInt(newPower))
+	} else {
+		delegation.Shares = math.LegacyNewDecFromInt(newPower)
+	}
+	if err := k.SetDelegation(ctx, delegation); err != nil {
+		logger.Error("failed to set delegation for power update", "validator", validator.OperatorAddress, "error", err)
+		return err
+	}
+
+	if err := k.Hooks().AfterDelegationModified(ctx, delegator, valAddr); err != nil {
+		logger.Error("failed to call AfterDelegationModified hook for power update", "validator", validator.OperatorAddress, "error", err)
+		return err
+	}
+
+	return nil
 }
 
-func (k Keeper) createValidator(ctx context.Context, computeResult ComputeResult, server types.MsgServer) (*types.Validator, error) {
-	logger := k.Logger(ctx)
-	newValAddr, err := sdk.ValAddressFromBech32(computeResult.OperatorAddress)
+// removeValidator sets validator power to zero.
+// The validator remains in storage and will be transitioned to unbonding
+// by ApplyAndReturnValidatorSetUpdates, then deleted after unbonding period.
+func (k Keeper) removeValidator(ctx context.Context, validator types.Validator) error {
+	sdkCtx := sdk.UnwrapSDKContext(ctx)
+	logger := k.Logger(sdkCtx)
 
-	if err != nil {
-		logger.Error("Error converting operator address to val address", "error", err.Error())
-		return nil, err
-	}
-	denom, err := k.BondDenom(ctx)
-	if err != nil {
-		return nil, err
+	// Remove from old power index before changing power
+	if err := k.DeleteValidatorByPowerIndex(ctx, validator); err != nil {
+		logger.Error("failed to delete validator by power index for removal", "validator", validator.OperatorAddress, "error", err)
+		return err
 	}
 
-	createValidatorMsg, err := types.NewMsgCreateValidator(
-		newValAddr.String(),
-		computeResult.ValidatorPubKey,
-		sdk.NewCoin(denom, math.NewInt(computeResult.Power)),
-		types.Description{
-			Moniker: newValAddr.String(),
-			Details: "Created after Proof of Compute",
-		},
+	// Set power to 0 but keep status as Bonded
+	// ApplyAndReturnValidatorSetUpdates will transition it from Bonded -> Unbonding -> deleted
+	validator.Tokens = math.ZeroInt()
+	validator.DelegatorShares = math.LegacyZeroDec()
+	// Keep validator.Status as-is (should be Bonded) for proper state transition
 
-		types.CommissionRates{
-			Rate:          math.LegacyMustNewDecFromStr("0.1"),
-			MaxRate:       math.LegacyMustNewDecFromStr("0.2"),
-			MaxChangeRate: math.LegacyMustNewDecFromStr("0.01"),
-		},
-		math.NewInt(1),
-	)
-	if err != nil {
-		logger.Error("Error creating validator message", "error", err.Error())
-		return nil, err
+	// Save the updated validator
+	if err := k.SetValidator(ctx, validator); err != nil {
+		logger.Error("failed to set validator with zero power", "validator", validator.OperatorAddress, "error", err)
+		return err
 	}
-	_, err = server.CreateValidator(ctx, createValidatorMsg)
-	if err != nil {
-		logger.Error("Error creating validator", "error", err.Error())
-		return nil, err
+
+	// Re-add to power index with zero power
+	if err := k.SetValidatorByPowerIndex(ctx, validator); err != nil {
+		logger.Error("failed to set validator by power index with zero power", "validator", validator.OperatorAddress, "error", err)
+		return err
 	}
-	newVal, err := k.GetValidator(ctx, newValAddr)
+
+	// Set delegation to zero shares (this signals for cleanup in UnbondAllMatureValidators)
+	valAddr, err := k.ValidatorAddressCodec().StringToBytes(validator.OperatorAddress)
 	if err != nil {
-		logger.Error("Error getting created validator", "error", err.Error())
-		return nil, err
+		logger.Error("failed to convert operator address for delegation removal", "address", validator.OperatorAddress, "error", err)
+		return err
 	}
-	logger.Info("Created validator", "validator", newVal.String())
-	bondedVal, err := k.bondValidator(ctx, newVal)
-	if err != nil {
-		logger.Error("Error bonding validator", "error", err.Error())
-		return nil, err
+	delegator := sdk.AccAddress(valAddr)
+	delegation, err := k.GetDelegation(ctx, delegator, valAddr)
+	if err == nil {
+		delegation.Shares = math.LegacyZeroDec()
+		if err := k.SetDelegation(ctx, delegation); err != nil {
+			logger.Error("failed to set delegation to zero", "validator", validator.OperatorAddress, "error", err)
+			return err
+		}
 	}
-	logger.Info("Bonded validator", "validator", bondedVal.String())
-	return &bondedVal, nil
+
+	return nil
 }

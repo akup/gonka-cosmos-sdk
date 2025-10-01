@@ -126,9 +126,16 @@ func (k Keeper) SetNewValidatorByPowerIndex(ctx context.Context, validator types
 }
 
 // AddValidatorTokensAndShares updates the tokens of an existing validator, updates the validators power index key
+// PROOF OF COMPUTE: Only allowed during genesis (block height <= 1). After genesis, validator power
+// can only be set via SetComputeValidators to prevent bypassing compute-based validation.
 func (k Keeper) AddValidatorTokensAndShares(ctx context.Context, validator types.Validator,
 	tokensToAdd math.Int,
 ) (valOut types.Validator, addedShares math.LegacyDec, err error) {
+	sdkCtx := sdk.UnwrapSDKContext(ctx)
+	if sdkCtx.BlockHeight() > 1 {
+		return validator, math.LegacyZeroDec(), fmt.Errorf("AddValidatorTokensAndShares is disabled after genesis in Proof of Compute mode")
+	}
+
 	err = k.DeleteValidatorByPowerIndex(ctx, validator)
 	if err != nil {
 		return valOut, addedShares, err
@@ -145,9 +152,16 @@ func (k Keeper) AddValidatorTokensAndShares(ctx context.Context, validator types
 }
 
 // RemoveValidatorTokensAndShares updates the tokens of an existing validator, updates the validators power index key
+// PROOF OF COMPUTE: Only allowed during genesis (block height <= 1). After genesis, validator power
+// can only be set via SetComputeValidators to prevent bypassing compute-based validation.
 func (k Keeper) RemoveValidatorTokensAndShares(ctx context.Context, validator types.Validator,
 	sharesToRemove math.LegacyDec,
 ) (valOut types.Validator, removedTokens math.Int, err error) {
+	sdkCtx := sdk.UnwrapSDKContext(ctx)
+	if sdkCtx.BlockHeight() > 1 {
+		return validator, math.ZeroInt(), fmt.Errorf("RemoveValidatorTokensAndShares is disabled after genesis in Proof of Compute mode")
+	}
+
 	err = k.DeleteValidatorByPowerIndex(ctx, validator)
 	if err != nil {
 		return valOut, removedTokens, err
