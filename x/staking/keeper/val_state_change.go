@@ -56,7 +56,7 @@ func (k Keeper) DeleteZeroPowerValidators(ctx context.Context) error {
 			// Only delete if already removed from LastValidatorPower (ApplyAndReturnValidatorSetUpdates processed it)
 			_, err = k.GetLastValidatorPower(ctx, valAddr)
 			if err == nil {
-				logger.Info("skipping zero-power validator still in LastValidatorPower",
+				logger.Debug("skipping zero-power validator still in LastValidatorPower",
 					"operator", validator.GetOperator())
 				continue
 			}
@@ -130,7 +130,7 @@ func (k Keeper) deleteValidatorInternal(ctx context.Context, validator types.Val
 // at the previous block height or were removed from the validator set entirely
 // are returned to CometBFT.
 func (k Keeper) ApplyAndReturnValidatorSetUpdates(ctx context.Context) (updates []abci.ValidatorUpdate, err error) {
-	k.Logger(ctx).Info("applying validator set updates")
+	k.Logger(ctx).Debug("applying validator set updates")
 	params, err := k.GetParams(ctx)
 	if err != nil {
 		return nil, err
