@@ -155,12 +155,6 @@ func (k Keeper) createValidatorImmediate(ctx context.Context, operatorAddress st
 		return err
 	}
 
-	consensusPower := validator.ConsensusPower(k.PowerReduction(ctx))
-	if err := k.SetLastValidatorPower(ctx, valAddr, consensusPower); err != nil {
-		logger.Error("failed to set last validator power", "validator", operatorAddress, "power", consensusPower, "error", err)
-		return err
-	}
-
 	return nil
 }
 
@@ -228,12 +222,6 @@ func (k Keeper) updateValidatorPower(ctx context.Context, validator types.Valida
 
 	if err := k.Hooks().AfterDelegationModified(ctx, delegator, valAddr); err != nil {
 		logger.Error("failed to call AfterDelegationModified hook for power update", "validator", validator.OperatorAddress, "error", err)
-		return err
-	}
-
-	consensusPower := validator.ConsensusPower(k.PowerReduction(ctx))
-	if err := k.SetLastValidatorPower(ctx, valAddr, consensusPower); err != nil {
-		logger.Error("failed to set last validator power for update", "validator", validator.OperatorAddress, "power", consensusPower, "error", err)
 		return err
 	}
 
