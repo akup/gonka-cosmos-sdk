@@ -230,11 +230,24 @@ func (k Keeper) updateValidatorPower(ctx context.Context, validator types.Valida
 
 // markValidatorForDeletion sets validator power to zero for immediate deletion.
 // In Proof of Compute, we skip the unbonding period since there are no tokens to lock.
-// The validator is deleted in the next BlockValidatorUpdates call.
+// Jailed validators are deleted immediately; others are processed in the next BlockValidatorUpdates.
 func (k Keeper) markValidatorForDeletion(ctx context.Context, validator types.Validator) error {
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
 	logger := k.Logger(sdkCtx)
 
+	valAddr, err := k.ValidatorAddressCodec().StringToBytes(validator.OperatorAddress)
+	if err != nil {
+		logger.Error("failed to convert operator address", "address", validator.OperatorAddress, "error", err)
+		return err
+	}
+
+	// Jailed validators can't be added to power index, so delete them immediately
+	if validator.Jailed {
+		logger.Info("deleting jailed validator immediately", "operator", validator.OperatorAddress)
+		return k.deleteValidatorInternal(ctx, validator, valAddr)
+	}
+
+	// For non-jailed validators, mark for deletion in next block
 	if err := k.DeleteValidatorByPowerIndex(ctx, validator); err != nil {
 		logger.Error("failed to delete validator by power index", "validator", validator.OperatorAddress, "error", err)
 		return err
@@ -243,8 +256,6 @@ func (k Keeper) markValidatorForDeletion(ctx context.Context, validator types.Va
 	// Set power to zero (status kept as-is for ApplyAndReturnValidatorSetUpdates)
 	validator.Tokens = math.ZeroInt()
 	validator.DelegatorShares = math.LegacyZeroDec()
-
-	// Clear unbonding IDs - not needed in Proof of Compute
 	validator.UnbondingIds = []uint64{}
 
 	if err := k.SetValidator(ctx, validator); err != nil {
@@ -259,11 +270,6 @@ func (k Keeper) markValidatorForDeletion(ctx context.Context, validator types.Va
 	}
 
 	// Zero out delegation shares
-	valAddr, err := k.ValidatorAddressCodec().StringToBytes(validator.OperatorAddress)
-	if err != nil {
-		logger.Error("failed to convert operator address", "address", validator.OperatorAddress, "error", err)
-		return err
-	}
 	delegator := sdk.AccAddress(valAddr)
 	delegation, err := k.GetDelegation(ctx, delegator, valAddr)
 	if err == nil {
