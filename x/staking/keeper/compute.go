@@ -177,6 +177,11 @@ func (k Keeper) updateValidatorPower(ctx context.Context, validator types.Valida
 		logger.Error("failed to set validator for power update", "validator", validator.OperatorAddress, "error", err)
 		return err
 	}
+	// Always ensure ValidatorByConsAddr index is set for consistency
+	if err := k.SetValidatorByConsAddr(ctx, validator); err != nil {
+		logger.Error("failed to set validator by cons addr for power update", "validator", validator.OperatorAddress, "error", err)
+		return err
+	}
 	if err := k.SetValidatorByPowerIndex(ctx, validator); err != nil {
 		logger.Error("failed to set validator by power index for power update", "validator", validator.OperatorAddress, "error", err)
 		return err
