@@ -34,6 +34,11 @@ func (k Keeper) BlockValidatorUpdates(ctx context.Context) ([]abci.ValidatorUpda
 		return nil, err
 	}
 
+	// Complete unbonding for mature validators
+	if err := k.UnbondAllMatureValidators(ctx); err != nil {
+		return nil, err
+	}
+
 	return validatorUpdates, nil
 }
 

@@ -76,7 +76,6 @@ func (k Keeper) GetParams(ctx context.Context) (params types.Params, err error) 
 	}
 
 	if bz == nil {
-		// Return default params if none are set in the store
 		return types.DefaultParams(), nil
 	}
 

@@ -155,8 +155,6 @@ func (k Keeper) createValidatorImmediate(ctx context.Context, operatorAddress st
 		return err
 	}
 
-	// Update LastValidatorPower index - critical for snapshot compatibility
-	// This ensures CometBFT knows about this validator in the active set
 	consensusPower := validator.ConsensusPower(k.PowerReduction(ctx))
 	if err := k.SetLastValidatorPower(ctx, valAddr, consensusPower); err != nil {
 		logger.Error("failed to set last validator power", "validator", operatorAddress, "power", consensusPower, "error", err)
@@ -188,7 +186,6 @@ func (k Keeper) updateValidatorPower(ctx context.Context, validator types.Valida
 		logger.Error("failed to set validator for power update", "validator", validator.OperatorAddress, "error", err)
 		return err
 	}
-	// Always ensure ValidatorByConsAddr index is set for consistency
 	if err := k.SetValidatorByConsAddr(ctx, validator); err != nil {
 		logger.Error("failed to set validator by cons addr for power update", "validator", validator.OperatorAddress, "error", err)
 		return err
@@ -215,8 +212,6 @@ func (k Keeper) updateValidatorPower(ctx context.Context, validator types.Valida
 		return err
 	}
 
-	// Call AfterValidatorBonded hook if validator status changed to Bonded or was unjailed
-	// This is critical for slashing module to update/create signing info
 	statusChanged := oldStatus != types.Bonded && validator.Status == types.Bonded
 	wasUnjailed := oldJailed && !validator.Jailed
 	if statusChanged || wasUnjailed {
@@ -236,8 +231,6 @@ func (k Keeper) updateValidatorPower(ctx context.Context, validator types.Valida
 		return err
 	}
 
-	// Update LastValidatorPower index - critical for snapshot compatibility
-	// This ensures CometBFT tracks power changes correctly
 	consensusPower := validator.ConsensusPower(k.PowerReduction(ctx))
 	if err := k.SetLastValidatorPower(ctx, valAddr, consensusPower); err != nil {
 		logger.Error("failed to set last validator power for update", "validator", validator.OperatorAddress, "power", consensusPower, "error", err)
