@@ -155,6 +155,14 @@ func (k Keeper) createValidatorImmediate(ctx context.Context, operatorAddress st
 		return err
 	}
 
+	// Update LastValidatorPower index - critical for snapshot compatibility
+	// This ensures CometBFT knows about this validator in the active set
+	consensusPower := validator.ConsensusPower(k.PowerReduction(ctx))
+	if err := k.SetLastValidatorPower(ctx, valAddr, consensusPower); err != nil {
+		logger.Error("failed to set last validator power", "validator", operatorAddress, "power", consensusPower, "error", err)
+		return err
+	}
+
 	return nil
 }
 
@@ -167,6 +175,9 @@ func (k Keeper) updateValidatorPower(ctx context.Context, validator types.Valida
 		logger.Error("failed to delete validator by power index", "validator", validator.OperatorAddress, "error", err)
 		return err
 	}
+
+	oldStatus := validator.Status
+	oldJailed := validator.Jailed
 
 	validator.Tokens = newPower
 	validator.DelegatorShares = math.LegacyNewDecFromInt(newPower)
@@ -204,8 +215,32 @@ func (k Keeper) updateValidatorPower(ctx context.Context, validator types.Valida
 		return err
 	}
 
+	// Call AfterValidatorBonded hook if validator status changed to Bonded or was unjailed
+	// This is critical for slashing module to update/create signing info
+	statusChanged := oldStatus != types.Bonded && validator.Status == types.Bonded
+	wasUnjailed := oldJailed && !validator.Jailed
+	if statusChanged || wasUnjailed {
+		consAddr, err := validator.GetConsAddr()
+		if err != nil {
+			logger.Error("failed to get validator cons addr for bonded hook", "validator", validator.OperatorAddress, "error", err)
+			return err
+		}
+		if err := k.Hooks().AfterValidatorBonded(ctx, consAddr, valAddr); err != nil {
+			logger.Error("failed to call AfterValidatorBonded hook for power update", "validator", validator.OperatorAddress, "error", err)
+			return err
+		}
+	}
+
 	if err := k.Hooks().AfterDelegationModified(ctx, delegator, valAddr); err != nil {
 		logger.Error("failed to call AfterDelegationModified hook for power update", "validator", validator.OperatorAddress, "error", err)
+		return err
+	}
+
+	// Update LastValidatorPower index - critical for snapshot compatibility
+	// This ensures CometBFT tracks power changes correctly
+	consensusPower := validator.ConsensusPower(k.PowerReduction(ctx))
+	if err := k.SetLastValidatorPower(ctx, valAddr, consensusPower); err != nil {
+		logger.Error("failed to set last validator power for update", "validator", validator.OperatorAddress, "power", consensusPower, "error", err)
 		return err
 	}
 
