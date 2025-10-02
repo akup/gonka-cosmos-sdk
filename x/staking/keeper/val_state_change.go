@@ -20,22 +20,23 @@ import (
 // BlockValidatorUpdates calculates the ValidatorUpdates for the current block
 // Called in each EndBlock
 func (k Keeper) BlockValidatorUpdates(ctx context.Context) ([]abci.ValidatorUpdate, error) {
+	// Delete zero-power validators from previous block (respects CometBFT's 1-block ValidatorUpdateDelay)
+	if err := k.DeleteZeroPowerValidators(ctx); err != nil {
+		return nil, err
+	}
+
 	// Calculate validator set changes and send updates to CometBFT
 	validatorUpdates, err := k.ApplyAndReturnValidatorSetUpdates(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	// Delete validators that were marked for deletion (have zero power)
-	if err := k.DeleteZeroPowerValidators(ctx); err != nil {
-		return nil, err
-	}
-
 	return validatorUpdates, nil
 }
 
-// DeleteZeroPowerValidators deletes all validators that have zero power.
-// This is called after ApplyAndReturnValidatorSetUpdates so CometBFT has been notified.
+// DeleteZeroPowerValidators deletes validators with zero power that are not in LastValidatorPower.
+// Only deletes validators already processed by ApplyAndReturnValidatorSetUpdates (not in LastValidatorPower),
+// preventing errors from deleting validators that ApplyAndReturnValidatorSetUpdates still needs to fetch.
 func (k Keeper) DeleteZeroPowerValidators(ctx context.Context) error {
 	logger := k.Logger(ctx)
 
@@ -46,13 +47,21 @@ func (k Keeper) DeleteZeroPowerValidators(ctx context.Context) error {
 
 	for _, validator := range allValidators {
 		if validator.GetTokens().IsZero() {
-			logger.Info("deleting zero-power validator", "operator", validator.GetOperator(), "status", validator.Status)
-
 			valAddr, err := k.validatorAddressCodec.StringToBytes(validator.GetOperator())
 			if err != nil {
 				logger.Error("failed to convert operator address", "operator", validator.GetOperator(), "error", err)
 				continue
 			}
+
+			// Only delete if already removed from LastValidatorPower (ApplyAndReturnValidatorSetUpdates processed it)
+			_, err = k.GetLastValidatorPower(ctx, valAddr)
+			if err == nil {
+				logger.Info("skipping zero-power validator still in LastValidatorPower",
+					"operator", validator.GetOperator())
+				continue
+			}
+
+			logger.Info("deleting zero-power validator", "operator", validator.GetOperator())
 
 			if err := k.deleteValidatorInternal(ctx, validator, valAddr); err != nil {
 				logger.Error("failed to delete validator", "operator", validator.GetOperator(), "error", err)
