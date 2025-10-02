@@ -66,10 +66,10 @@ func (k Keeper) SetComputeValidators(ctx context.Context, computeResults []Compu
 			}
 
 			if power.IsZero() {
-				// Power is zero, so remove the validator
-				logger.Info("removing validator with zero power", "operator", val.OperatorAddress)
-				if err := k.removeValidator(ctx, val); err != nil {
-					logger.Error("failed to remove validator", "operator", val.OperatorAddress, "error", err)
+				// Mark for deletion - actual deletion happens in BlockValidatorUpdates
+				logger.Info("marking validator for removal (zero power)", "operator", val.OperatorAddress)
+				if err := k.markValidatorForDeletion(ctx, val); err != nil {
+					logger.Error("failed to mark validator for deletion", "operator", val.OperatorAddress, "error", err)
 				}
 			} else {
 				logger.Info("updating validator power", "operator", val.OperatorAddress, "new_power", power)
@@ -80,12 +80,12 @@ func (k Keeper) SetComputeValidators(ctx context.Context, computeResults []Compu
 		}
 	}
 
-	// Remove validators that are no longer in the compute results
+	// Mark validators for deletion that are no longer in the compute results
 	for consAddrStr, val := range currentValMap {
 		if _, exists := resultsMap[consAddrStr]; !exists {
-			logger.Info("removing validator no longer in compute results", "operator", val.OperatorAddress)
-			if err := k.removeValidator(ctx, val); err != nil {
-				logger.Error("failed to remove stale validator", "operator", val.OperatorAddress, "error", err)
+			logger.Info("marking validator for removal (not in compute results)", "operator", val.OperatorAddress, "status", val.Status, "jailed", val.Jailed)
+			if err := k.markValidatorForDeletion(ctx, val); err != nil {
+				logger.Error("failed to mark validator for deletion", "operator", val.OperatorAddress, "error", err)
 			}
 		}
 	}
@@ -168,6 +168,9 @@ func (k Keeper) updateValidatorPower(ctx context.Context, validator types.Valida
 		return err
 	}
 
+	oldStatus := validator.Status
+	oldJailed := validator.Jailed
+
 	validator.Tokens = newPower
 	validator.DelegatorShares = math.LegacyNewDecFromInt(newPower)
 	validator.Status = types.Bonded // Ensure validator is bonded
@@ -175,6 +178,10 @@ func (k Keeper) updateValidatorPower(ctx context.Context, validator types.Valida
 
 	if err := k.SetValidator(ctx, validator); err != nil {
 		logger.Error("failed to set validator for power update", "validator", validator.OperatorAddress, "error", err)
+		return err
+	}
+	if err := k.SetValidatorByConsAddr(ctx, validator); err != nil {
+		logger.Error("failed to set validator by cons addr for power update", "validator", validator.OperatorAddress, "error", err)
 		return err
 	}
 	if err := k.SetValidatorByPowerIndex(ctx, validator); err != nil {
@@ -199,6 +206,20 @@ func (k Keeper) updateValidatorPower(ctx context.Context, validator types.Valida
 		return err
 	}
 
+	statusChanged := oldStatus != types.Bonded && validator.Status == types.Bonded
+	wasUnjailed := oldJailed && !validator.Jailed
+	if statusChanged || wasUnjailed {
+		consAddr, err := validator.GetConsAddr()
+		if err != nil {
+			logger.Error("failed to get validator cons addr for bonded hook", "validator", validator.OperatorAddress, "error", err)
+			return err
+		}
+		if err := k.Hooks().AfterValidatorBonded(ctx, consAddr, valAddr); err != nil {
+			logger.Error("failed to call AfterValidatorBonded hook for power update", "validator", validator.OperatorAddress, "error", err)
+			return err
+		}
+	}
+
 	if err := k.Hooks().AfterDelegationModified(ctx, delegator, valAddr); err != nil {
 		logger.Error("failed to call AfterDelegationModified hook for power update", "validator", validator.OperatorAddress, "error", err)
 		return err
@@ -207,10 +228,9 @@ func (k Keeper) updateValidatorPower(ctx context.Context, validator types.Valida
 	return nil
 }
 
-// removeValidator sets validator power to zero.
-// The validator remains in storage and will be transitioned to unbonding
-// by ApplyAndReturnValidatorSetUpdates, then deleted after unbonding period.
-func (k Keeper) removeValidator(ctx context.Context, validator types.Validator) error {
+// markValidatorForDeletion sets validator power to zero.
+// The validator will be deleted in the next BlockValidatorUpdates call.
+func (k Keeper) markValidatorForDeletion(ctx context.Context, validator types.Validator) error {
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
 	logger := k.Logger(sdkCtx)
 

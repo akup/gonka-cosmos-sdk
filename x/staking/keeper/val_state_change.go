@@ -20,21 +20,101 @@ import (
 // BlockValidatorUpdates calculates the ValidatorUpdates for the current block
 // Called in each EndBlock
 func (k Keeper) BlockValidatorUpdates(ctx context.Context) ([]abci.ValidatorUpdate, error) {
-	// Calculate validator set changes.
-	//
-	// NOTE: ApplyAndReturnValidatorSetUpdates has to come before
-	// UnbondAllMatureValidatorQueue.
-	// This fixes a bug when the unbonding period is instant (is the case in
-	// some of the tests). The test expected the validator to be completely
-	// unbonded after the Endblocker (go from Bonded -> Unbonding during
-	// ApplyAndReturnValidatorSetUpdates and then Unbonding -> Unbonded during
-	// UnbondAllMatureValidatorQueue).
+	// Delete zero-power validators from previous block (respects CometBFT's 1-block ValidatorUpdateDelay)
+	if err := k.DeleteZeroPowerValidators(ctx); err != nil {
+		return nil, err
+	}
+
+	// Calculate validator set changes and send updates to CometBFT
 	validatorUpdates, err := k.ApplyAndReturnValidatorSetUpdates(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	return validatorUpdates, nil
+}
+
+// DeleteZeroPowerValidators deletes validators with zero power that are not in LastValidatorPower.
+// Only deletes validators already processed by ApplyAndReturnValidatorSetUpdates (not in LastValidatorPower),
+// preventing errors from deleting validators that ApplyAndReturnValidatorSetUpdates still needs to fetch.
+func (k Keeper) DeleteZeroPowerValidators(ctx context.Context) error {
+	logger := k.Logger(ctx)
+
+	allValidators, err := k.GetAllValidators(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get all validators: %w", err)
+	}
+
+	for _, validator := range allValidators {
+		if validator.GetTokens().IsZero() {
+			valAddr, err := k.validatorAddressCodec.StringToBytes(validator.GetOperator())
+			if err != nil {
+				logger.Error("failed to convert operator address", "operator", validator.GetOperator(), "error", err)
+				continue
+			}
+
+			// Only delete if already removed from LastValidatorPower (ApplyAndReturnValidatorSetUpdates processed it)
+			_, err = k.GetLastValidatorPower(ctx, valAddr)
+			if err == nil {
+				logger.Info("skipping zero-power validator still in LastValidatorPower",
+					"operator", validator.GetOperator())
+				continue
+			}
+
+			logger.Info("deleting zero-power validator", "operator", validator.GetOperator())
+
+			if err := k.deleteValidatorInternal(ctx, validator, valAddr); err != nil {
+				logger.Error("failed to delete validator", "operator", validator.GetOperator(), "error", err)
+				continue
+			}
+		}
+	}
+
+	return nil
+}
+
+// deleteValidatorInternal performs the actual deletion of a validator from all stores.
+// This is the common deletion logic used by both RemoveValidator and DeleteZeroPowerValidators.
+func (k Keeper) deleteValidatorInternal(ctx context.Context, validator types.Validator, valAddr sdk.ValAddress) error {
+	consAddr, err := validator.GetConsAddr()
+	if err != nil {
+		return err
+	}
+
+	store := k.storeService.OpenKVStore(ctx)
+
+	// Delete main validator record
+	if err := store.Delete(types.GetValidatorKey(valAddr)); err != nil {
+		return err
+	}
+
+	// Delete consensus address mapping
+	if err := store.Delete(types.GetValidatorByConsAddrKey(consAddr)); err != nil {
+		return err
+	}
+
+	// Delete power index
+	if err := store.Delete(types.GetValidatorsByPowerIndexKey(validator, k.PowerReduction(ctx), k.validatorAddressCodec)); err != nil {
+		return err
+	}
+
+	// Delete from LastValidatorPower if present (may not exist for unbonding validators)
+	_ = k.DeleteLastValidatorPower(ctx, valAddr)
+
+	// Delete self-delegation if exists
+	delegator := sdk.AccAddress(valAddr)
+	if delegation, err := k.GetDelegation(ctx, delegator, valAddr); err == nil {
+		if err := k.RemoveDelegation(ctx, delegation); err != nil {
+			return err
+		}
+	}
+
+	// Call hook to notify other modules
+	if err := k.Hooks().AfterValidatorRemoved(ctx, consAddr, valAddr); err != nil {
+		k.Logger(ctx).Error("error in after validator removed hook", "error", err)
+	}
+
+	return nil
 }
 
 // ApplyAndReturnValidatorSetUpdates applies and return accumulated updates to the bonded validator set. Also,
