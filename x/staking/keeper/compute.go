@@ -228,48 +228,54 @@ func (k Keeper) updateValidatorPower(ctx context.Context, validator types.Valida
 	return nil
 }
 
-// markValidatorForDeletion sets validator power to zero.
-// The validator will be deleted in the next BlockValidatorUpdates call.
+// markValidatorForDeletion sets validator power to zero for immediate deletion.
+// In Proof of Compute, we skip the unbonding period since there are no tokens to lock.
+// Jailed validators are deleted immediately; others are processed in the next BlockValidatorUpdates.
 func (k Keeper) markValidatorForDeletion(ctx context.Context, validator types.Validator) error {
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
 	logger := k.Logger(sdkCtx)
 
-	// Remove from old power index before changing power
-	if err := k.DeleteValidatorByPowerIndex(ctx, validator); err != nil {
-		logger.Error("failed to delete validator by power index for removal", "validator", validator.OperatorAddress, "error", err)
+	valAddr, err := k.ValidatorAddressCodec().StringToBytes(validator.OperatorAddress)
+	if err != nil {
+		logger.Error("failed to convert operator address", "address", validator.OperatorAddress, "error", err)
 		return err
 	}
 
-	// Set power to 0 but keep status as Bonded
-	// ApplyAndReturnValidatorSetUpdates will transition it from Bonded -> Unbonding -> deleted
+	// Jailed validators can't be added to power index, so delete them immediately
+	if validator.Jailed {
+		logger.Info("deleting jailed validator immediately", "operator", validator.OperatorAddress)
+		return k.deleteValidatorInternal(ctx, validator, valAddr)
+	}
+
+	// For non-jailed validators, mark for deletion in next block
+	if err := k.DeleteValidatorByPowerIndex(ctx, validator); err != nil {
+		logger.Error("failed to delete validator by power index", "validator", validator.OperatorAddress, "error", err)
+		return err
+	}
+
+	// Set power to zero (status kept as-is for ApplyAndReturnValidatorSetUpdates)
 	validator.Tokens = math.ZeroInt()
 	validator.DelegatorShares = math.LegacyZeroDec()
-	// Keep validator.Status as-is (should be Bonded) for proper state transition
+	validator.UnbondingIds = []uint64{}
 
-	// Save the updated validator
 	if err := k.SetValidator(ctx, validator); err != nil {
 		logger.Error("failed to set validator with zero power", "validator", validator.OperatorAddress, "error", err)
 		return err
 	}
 
-	// Re-add to power index with zero power
+	// Re-add to power index with zero power so ApplyAndReturnValidatorSetUpdates processes it
 	if err := k.SetValidatorByPowerIndex(ctx, validator); err != nil {
 		logger.Error("failed to set validator by power index with zero power", "validator", validator.OperatorAddress, "error", err)
 		return err
 	}
 
-	// Set delegation to zero shares (this signals for cleanup in UnbondAllMatureValidators)
-	valAddr, err := k.ValidatorAddressCodec().StringToBytes(validator.OperatorAddress)
-	if err != nil {
-		logger.Error("failed to convert operator address for delegation removal", "address", validator.OperatorAddress, "error", err)
-		return err
-	}
+	// Zero out delegation shares
 	delegator := sdk.AccAddress(valAddr)
 	delegation, err := k.GetDelegation(ctx, delegator, valAddr)
 	if err == nil {
 		delegation.Shares = math.LegacyZeroDec()
 		if err := k.SetDelegation(ctx, delegation); err != nil {
-			logger.Error("failed to set delegation to zero", "validator", validator.OperatorAddress, "error", err)
+			logger.Error("failed to zero delegation shares", "validator", validator.OperatorAddress, "error", err)
 			return err
 		}
 	}

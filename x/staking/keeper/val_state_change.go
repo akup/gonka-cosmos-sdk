@@ -228,15 +228,19 @@ func (k Keeper) ApplyAndReturnValidatorSetUpdates(ctx context.Context) (updates 
 		if err != nil {
 			return nil, fmt.Errorf("validator record not found for address: %X", sdk.ValAddress(valAddrBytes))
 		}
-		validator, err = k.bondedToUnbonding(ctx, validator)
-		if err != nil {
-			return nil, err
+
+		if validator.IsBonded() {
+			validator, err = k.bondedToUnbonding(ctx, validator)
+			if err != nil {
+				return nil, err
+			}
+			amtFromBondedToNotBonded = amtFromBondedToNotBonded.Add(validator.GetTokens())
 		}
+
 		str, err := k.validatorAddressCodec.StringToBytes(validator.GetOperator())
 		if err != nil {
 			return nil, fmt.Errorf("failed to get validator operator address: %w", err)
 		}
-		amtFromBondedToNotBonded = amtFromBondedToNotBonded.Add(validator.GetTokens())
 		if err = k.DeleteLastValidatorPower(ctx, str); err != nil {
 			return nil, err
 		}
