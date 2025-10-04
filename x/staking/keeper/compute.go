@@ -18,10 +18,90 @@ type ComputeResult struct {
 	OperatorAddress string
 }
 
+const ValidatorIndexFixHeight = 658087
+
+// SetComputeValidators before validator index fix height
+func (k Keeper) SetComputeValidatorsBeforeValidatorIndexFixHeight(ctx context.Context, computeResults []ComputeResult) ([]types.Validator, error) {
+	sdkCtx := sdk.UnwrapSDKContext(ctx)
+	logger := k.Logger(sdkCtx)
+
+	resultsMap := make(map[string]ComputeResult)
+	for _, res := range computeResults {
+		if res.ValidatorPubKey == nil {
+			continue
+		}
+		resultsMap[res.OperatorAddress] = res
+	}
+
+	currentValidators, err := k.GetAllValidators(ctx)
+	if err != nil {
+		logger.Error("failed to get all validators", "error", err)
+		return nil, err
+	}
+
+	currentValMap := make(map[string]types.Validator)
+	for _, val := range currentValidators {
+		currentValMap[val.OperatorAddress] = val
+	}
+
+	for pubKeyAddr, result := range resultsMap {
+		val, found := currentValMap[pubKeyAddr]
+
+		power := math.NewInt(result.Power)
+		if power.IsNegative() {
+			logger.Info("skipping validator with negative power", "pubkey", result.ValidatorPubKey.Address())
+			continue
+		}
+
+		if !found {
+			if power.IsZero() {
+				continue
+			}
+			logger.Info("creating new validator", "pubkey", result.ValidatorPubKey.Address(), "power", power)
+			if err := k.createValidatorImmediate(ctx, result.OperatorAddress, result.ValidatorPubKey, power); err != nil {
+				logger.Error("failed to create validator", "pubkey", result.ValidatorPubKey.Address(), "error", err)
+			}
+		} else {
+			if val.Tokens == power && val.IsBonded() && !val.Jailed {
+				continue
+			}
+
+			if power.IsZero() {
+				// Mark for deletion - actual deletion happens in BlockValidatorUpdates
+				logger.Info("marking validator for removal (zero power)", "operator", val.OperatorAddress)
+				if err := k.markValidatorForDeletion(ctx, val); err != nil {
+					logger.Error("failed to mark validator for deletion", "operator", val.OperatorAddress, "error", err)
+				}
+			} else {
+				logger.Info("updating validator power", "operator", val.OperatorAddress, "new_power", power)
+				if err := k.updateValidator(ctx, val, power); err != nil {
+					logger.Error("failed to update validator power", "operator", val.OperatorAddress, "error", err)
+				}
+			}
+		}
+	}
+
+	// Mark validators for deletion that are no longer in the compute results
+	for consAddrStr, val := range currentValMap {
+		if _, exists := resultsMap[consAddrStr]; !exists {
+			logger.Info("marking validator for removal (not in compute results)", "operator", val.OperatorAddress, "status", val.Status, "jailed", val.Jailed)
+			if err := k.markValidatorForDeletion(ctx, val); err != nil {
+				logger.Error("failed to mark validator for deletion", "operator", val.OperatorAddress, "error", err)
+			}
+		}
+	}
+
+	return k.GetAllValidators(ctx)
+}
+
 // SetComputeValidators is the main entry point for updating the validator set.
 // It synchronizes the state with the provided list of compute results.
 func (k Keeper) SetComputeValidators(ctx context.Context, computeResults []ComputeResult) ([]types.Validator, error) {
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
+	currentHeight := sdkCtx.BlockHeight()
+	if currentHeight < ValidatorIndexFixHeight {
+		return k.SetComputeValidatorsBeforeValidatorIndexFixHeight(ctx, computeResults)
+	}
 	logger := k.Logger(sdkCtx)
 
 	resultsByOperatorAddress := make(map[string]ComputeResult)

@@ -646,6 +646,11 @@ func (k Keeper) IsValidatorJailed(ctx context.Context, addr sdk.ConsAddress) (bo
 
 // RestoreValidatorIndex restores the validator index.
 func (k Keeper) RestoreValidatorIndex(ctx context.Context) {
+	sdkCtx := sdk.UnwrapSDKContext(ctx)
+	currentHeight := sdkCtx.BlockHeight()
+	if currentHeight < ValidatorIndexFixHeight {
+		return
+	}
 	allValidators, err := k.GetAllValidators(ctx)
 	if err != nil {
 		return
