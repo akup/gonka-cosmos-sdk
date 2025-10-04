@@ -6,7 +6,6 @@ import (
 
 	"cosmossdk.io/math"
 
-	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
 	cryptotypes "github.com/cosmos/cosmos-sdk/crypto/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/x/staking/types"
@@ -89,15 +88,8 @@ func (k Keeper) SetComputeValidators(ctx context.Context, computeResults []Compu
 	for operatorAddress, result := range resultsByOperatorAddress {
 		val, found := currentValsByOperatorAddress[operatorAddress]
 		power := math.NewInt(result.Power)
-		if power.IsNegative() {
-			logger.Info("skipping validator with negative power", "pubkey", result.ValidatorPubKey.Address())
-			continue
-		}
 
 		if !found {
-			if power.IsZero() {
-				continue
-			}
 			logger.Info("creating new validator", "pubkey", result.ValidatorPubKey.Address(), "power", power)
 			if err := k.createValidatorImmediate(ctx, result.OperatorAddress, result.ValidatorPubKey, power); err != nil {
 				logger.Error("failed to create validator", "pubkey", result.ValidatorPubKey.Address(), "error", err)
@@ -109,7 +101,7 @@ func (k Keeper) SetComputeValidators(ctx context.Context, computeResults []Compu
 
 			if !power.IsZero() {
 				logger.Info("updating validator power", "operator", val.OperatorAddress, "new_power", power)
-				if err := k.updateValidator(ctx, val, power, result.ValidatorPubKey); err != nil {
+				if err := k.updateValidator(ctx, val, power); err != nil {
 					logger.Error("failed to update validator power", "operator", val.OperatorAddress, "error", err)
 				}
 			}
@@ -185,7 +177,7 @@ func (k Keeper) createValidatorImmediate(ctx context.Context, operatorAddress st
 }
 
 // updateValidator updates an existing validator's power.
-func (k Keeper) updateValidator(ctx context.Context, validator types.Validator, newPower math.Int, newConsensusPubKey cryptotypes.PubKey) error {
+func (k Keeper) updateValidator(ctx context.Context, validator types.Validator, newPower math.Int) error {
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
 	logger := k.Logger(sdkCtx)
 
@@ -193,12 +185,6 @@ func (k Keeper) updateValidator(ctx context.Context, validator types.Validator, 
 		logger.Error("failed to delete validator by power index", "validator", validator.OperatorAddress, "error", err)
 		return err
 	}
-	pkAny, err := codectypes.NewAnyWithValue(newConsensusPubKey)
-	if err != nil {
-		logger.Error("failed to create any value", "operator", validator.OperatorAddress, "error", err)
-		return err
-	}
-	validator.ConsensusPubkey = pkAny
 
 	oldStatus := validator.Status
 	oldJailed := validator.Jailed
