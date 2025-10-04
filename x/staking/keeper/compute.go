@@ -62,10 +62,18 @@ func (k Keeper) SetComputeValidators(ctx context.Context, computeResults []Compu
 		consensusAddress := res.ValidatorPubKey.Address().String()
 		if val, exists := currentValsByConsensusAddress[consensusAddress]; exists {
 			if val.OperatorAddress != res.OperatorAddress {
-				logger.Warn("different validator with the same consensus pubkey", "operator", val.OperatorAddress, "expected", res.OperatorAddress, "got", val.OperatorAddress)
+				logger.Warn("different validator with the same consensus pubkey", "operator", val.OperatorAddress, "expected", val.OperatorAddress, "got", res.OperatorAddress)
 				delete(resultsByOperatorAddress, res.OperatorAddress)
 			}
 		}
+
+		val, exists := currentValsByOperatorAddress[res.OperatorAddress]
+		if exists && val.ConsensusPubkey.GetCachedValue().(cryptotypes.PubKey).Address().String() != res.ValidatorPubKey.Address().String() {
+			logger.Warn("validator changed consensus pubkey, removing from validator set", "operator", val.OperatorAddress, "expected", val.ConsensusPubkey.GetCachedValue().(cryptotypes.PubKey).Address().String(), "got", res.ValidatorPubKey.Address().String())
+			delete(resultsByOperatorAddress, res.OperatorAddress)
+			continue
+		}
+
 	}
 
 	// Mark validators for deletion that are no longer in the compute results
@@ -95,14 +103,7 @@ func (k Keeper) SetComputeValidators(ctx context.Context, computeResults []Compu
 				logger.Error("failed to create validator", "pubkey", result.ValidatorPubKey.Address(), "error", err)
 			}
 		} else {
-			prevConsensusPubKey, err := val.ConsPubKey()
-			if err != nil {
-				logger.Error("failed to get validator pubkey", "operator", val.OperatorAddress, "error", err)
-				continue
-			}
-			consensusPubKeyChanged := prevConsensusPubKey.Address().String() != result.ValidatorPubKey.Address().String()
-
-			if val.Tokens == power && val.IsBonded() && !val.Jailed && !consensusPubKeyChanged {
+			if val.Tokens == power && val.IsBonded() && !val.Jailed {
 				continue
 			}
 
