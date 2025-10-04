@@ -6,6 +6,7 @@ import (
 
 	"cosmossdk.io/math"
 
+	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
 	cryptotypes "github.com/cosmos/cosmos-sdk/crypto/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/x/staking/types"
@@ -24,12 +25,15 @@ func (k Keeper) SetComputeValidators(ctx context.Context, computeResults []Compu
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
 	logger := k.Logger(sdkCtx)
 
-	resultsMap := make(map[string]ComputeResult)
+	resultsByOperatorAddress := make(map[string]ComputeResult)
 	for _, res := range computeResults {
 		if res.ValidatorPubKey == nil {
 			continue
 		}
-		resultsMap[res.OperatorAddress] = res
+		if res.Power <= 0 {
+			continue
+		}
+		resultsByOperatorAddress[res.OperatorAddress] = res
 	}
 
 	currentValidators, err := k.GetAllValidators(ctx)
@@ -38,14 +42,44 @@ func (k Keeper) SetComputeValidators(ctx context.Context, computeResults []Compu
 		return nil, err
 	}
 
-	currentValMap := make(map[string]types.Validator)
+	currentValsByConsensusAddress := make(map[string]types.Validator)
+	currentValsByOperatorAddress := make(map[string]types.Validator)
 	for _, val := range currentValidators {
-		currentValMap[val.OperatorAddress] = val
+		currentValsByOperatorAddress[val.OperatorAddress] = val
+		consensusPubKey, err := val.ConsPubKey()
+		if err != nil {
+			logger.Error("failed to get validator pubkey", "operator", val.OperatorAddress, "error", err)
+			continue
+		}
+		consensusAddress := consensusPubKey.Address().String()
+		currentValsByConsensusAddress[consensusAddress] = val
 	}
 
-	for pubKeyAddr, result := range resultsMap {
-		val, found := currentValMap[pubKeyAddr]
+	for _, res := range computeResults {
+		if res.ValidatorPubKey == nil {
+			continue
+		}
+		consensusAddress := res.ValidatorPubKey.Address().String()
+		if val, exists := currentValsByConsensusAddress[consensusAddress]; exists {
+			if val.OperatorAddress != res.OperatorAddress {
+				logger.Warn("different validator with the same consensus pubkey", "operator", val.OperatorAddress, "expected", res.OperatorAddress, "got", val.OperatorAddress)
+				delete(resultsByOperatorAddress, res.OperatorAddress)
+			}
+		}
+	}
 
+	// Mark validators for deletion that are no longer in the compute results
+	for operatorAddress, val := range currentValsByOperatorAddress {
+		if _, exists := resultsByOperatorAddress[operatorAddress]; !exists {
+			logger.Info("marking validator for removal (not in compute results)", "operator", val.OperatorAddress, "status", val.Status, "jailed", val.Jailed)
+			if err := k.markValidatorForDeletion(ctx, val); err != nil {
+				logger.Error("failed to mark validator for deletion", "operator", val.OperatorAddress, "error", err)
+			}
+		}
+	}
+
+	for operatorAddress, result := range resultsByOperatorAddress {
+		val, found := currentValsByOperatorAddress[operatorAddress]
 		power := math.NewInt(result.Power)
 		if power.IsNegative() {
 			logger.Info("skipping validator with negative power", "pubkey", result.ValidatorPubKey.Address())
@@ -61,31 +95,22 @@ func (k Keeper) SetComputeValidators(ctx context.Context, computeResults []Compu
 				logger.Error("failed to create validator", "pubkey", result.ValidatorPubKey.Address(), "error", err)
 			}
 		} else {
-			if val.Tokens == power && val.IsBonded() && !val.Jailed {
+			prevConsensusPubKey, err := val.ConsPubKey()
+			if err != nil {
+				logger.Error("failed to get validator pubkey", "operator", val.OperatorAddress, "error", err)
+				continue
+			}
+			consensusPubKeyChanged := prevConsensusPubKey.Address().String() != result.ValidatorPubKey.Address().String()
+
+			if val.Tokens == power && val.IsBonded() && !val.Jailed && !consensusPubKeyChanged {
 				continue
 			}
 
-			if power.IsZero() {
-				// Mark for deletion - actual deletion happens in BlockValidatorUpdates
-				logger.Info("marking validator for removal (zero power)", "operator", val.OperatorAddress)
-				if err := k.markValidatorForDeletion(ctx, val); err != nil {
-					logger.Error("failed to mark validator for deletion", "operator", val.OperatorAddress, "error", err)
-				}
-			} else {
+			if !power.IsZero() {
 				logger.Info("updating validator power", "operator", val.OperatorAddress, "new_power", power)
-				if err := k.updateValidatorPower(ctx, val, power); err != nil {
+				if err := k.updateValidator(ctx, val, power, result.ValidatorPubKey); err != nil {
 					logger.Error("failed to update validator power", "operator", val.OperatorAddress, "error", err)
 				}
-			}
-		}
-	}
-
-	// Mark validators for deletion that are no longer in the compute results
-	for consAddrStr, val := range currentValMap {
-		if _, exists := resultsMap[consAddrStr]; !exists {
-			logger.Info("marking validator for removal (not in compute results)", "operator", val.OperatorAddress, "status", val.Status, "jailed", val.Jailed)
-			if err := k.markValidatorForDeletion(ctx, val); err != nil {
-				logger.Error("failed to mark validator for deletion", "operator", val.OperatorAddress, "error", err)
 			}
 		}
 	}
@@ -158,8 +183,8 @@ func (k Keeper) createValidatorImmediate(ctx context.Context, operatorAddress st
 	return nil
 }
 
-// updateValidatorPower updates an existing validator's power.
-func (k Keeper) updateValidatorPower(ctx context.Context, validator types.Validator, newPower math.Int) error {
+// updateValidator updates an existing validator's power.
+func (k Keeper) updateValidator(ctx context.Context, validator types.Validator, newPower math.Int, newConsensusPubKey cryptotypes.PubKey) error {
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
 	logger := k.Logger(sdkCtx)
 
@@ -167,6 +192,12 @@ func (k Keeper) updateValidatorPower(ctx context.Context, validator types.Valida
 		logger.Error("failed to delete validator by power index", "validator", validator.OperatorAddress, "error", err)
 		return err
 	}
+	pkAny, err := codectypes.NewAnyWithValue(newConsensusPubKey)
+	if err != nil {
+		logger.Error("failed to create any value", "operator", validator.OperatorAddress, "error", err)
+		return err
+	}
+	validator.ConsensusPubkey = pkAny
 
 	oldStatus := validator.Status
 	oldJailed := validator.Jailed

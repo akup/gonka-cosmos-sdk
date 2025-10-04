@@ -20,6 +20,8 @@ func BeginBlocker(ctx context.Context, k keeper.Keeper) error {
 	// store whether or not they have actually signed it and slash/unbond any
 	// which have missed too many blocks in a row (downtime slashing)
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
+
+	k.RestoreValidatorIndex(ctx)
 	for _, voteInfo := range sdkCtx.VoteInfos() {
 		err := k.HandleValidatorSignature(ctx, voteInfo.Validator.Address, voteInfo.Validator.Power, comet.BlockIDFlag(voteInfo.BlockIdFlag))
 		if err != nil {

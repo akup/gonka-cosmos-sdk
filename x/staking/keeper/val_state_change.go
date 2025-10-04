@@ -109,6 +109,10 @@ func (k Keeper) deleteValidatorInternal(ctx context.Context, validator types.Val
 		}
 	}
 
+	if err = k.RemoveValidator(ctx, valAddr); err != nil {
+		return err
+	}
+
 	// Call hook to notify other modules
 	if err := k.Hooks().AfterValidatorRemoved(ctx, consAddr, valAddr); err != nil {
 		k.Logger(ctx).Error("error in after validator removed hook", "error", err)

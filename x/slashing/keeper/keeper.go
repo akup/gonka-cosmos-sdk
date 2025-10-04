@@ -49,6 +49,11 @@ func (k Keeper) Logger(ctx context.Context) log.Logger {
 	return sdkCtx.Logger().With("module", "x/"+types.ModuleName)
 }
 
+// RestoreValidatorIndex exposes the underlying staking keeper's RestoreValidatorIndex.
+func (k Keeper) RestoreValidatorIndex(ctx context.Context) {
+	k.sk.RestoreValidatorIndex(ctx)
+}
+
 // AddPubkey sets a address-pubkey relation
 func (k Keeper) AddPubkey(ctx context.Context, pubkey cryptotypes.PubKey) error {
 	bz, err := k.cdc.MarshalInterface(pubkey)
