@@ -111,7 +111,7 @@ func (k Keeper) deleteValidatorInternal(ctx context.Context, validator types.Val
 
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
 	currentHeight := sdkCtx.BlockHeight()
-	if currentHeight < ValidatorIndexFixHeight {
+	if currentHeight >= ValidatorIndexFixHeight {
 		if err = k.RemoveValidator(ctx, valAddr); err != nil {
 			return err
 		}
