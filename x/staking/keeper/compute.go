@@ -96,10 +96,14 @@ func (k Keeper) SetComputeValidatorsBeforeValidatorIndexFixHeight(ctx context.Co
 
 // SetComputeValidators is the main entry point for updating the validator set.
 // It synchronizes the state with the provided list of compute results.
-func (k Keeper) SetComputeValidators(ctx context.Context, computeResults []ComputeResult) ([]types.Validator, error) {
+func (k Keeper) SetComputeValidators(
+	ctx context.Context,
+	computeResults []ComputeResult,
+	isTestnet bool,
+) ([]types.Validator, error) {
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
 	currentHeight := sdkCtx.BlockHeight()
-	if currentHeight < ValidatorIndexFixHeight {
+	if currentHeight < ValidatorIndexFixHeight && !isTestnet {
 		return k.SetComputeValidatorsBeforeValidatorIndexFixHeight(ctx, computeResults)
 	}
 	logger := k.Logger(sdkCtx)
