@@ -644,6 +644,31 @@ func (k Keeper) IsValidatorJailed(ctx context.Context, addr sdk.ConsAddress) (bo
 	return v.Jailed, nil
 }
 
+// RestoreValidatorIndex restores the validator index.
+func (k Keeper) RestoreValidatorIndex(ctx context.Context) {
+	sdkCtx := sdk.UnwrapSDKContext(ctx)
+	currentHeight := sdkCtx.BlockHeight()
+	if currentHeight < ValidatorIndexFixHeight {
+		return
+	}
+	allValidators, err := k.GetAllValidators(ctx)
+	if err != nil {
+		return
+	}
+	for _, validator := range allValidators {
+		consAddr, err := validator.GetConsAddr()
+		if err != nil {
+			continue
+		}
+		_, err = k.GetValidatorByConsAddr(ctx, sdk.ConsAddress(consAddr))
+		if err == nil {
+			continue
+		}
+		k.SetValidatorByConsAddr(ctx, validator)
+		k.SetValidatorByPowerIndex(ctx, validator)
+	}
+}
+
 // GetPubKeyByConsAddr returns the consensus public key by consensus address.
 func (k Keeper) GetPubKeyByConsAddr(ctx context.Context, addr sdk.ConsAddress) (cmtprotocrypto.PublicKey, error) {
 	v, err := k.GetValidatorByConsAddr(ctx, addr)
