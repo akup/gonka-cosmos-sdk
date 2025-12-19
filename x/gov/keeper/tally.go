@@ -116,10 +116,27 @@ func defaultCalculateVoteResultsAndVotingPower(
 	return totalVotingPower, results, nil
 }
 
-// getCurrentValidators fetches all the bonded validators, insert them into currValidators
+// getCurrentValidators fetches all the bonded validators, insert them into currValidators.
+// This iterates over ALL validators (not just top maxValidators) to ensure votes from
+// all bonded validators are counted in governance tallying.
 func (k Keeper) getCurrentValidators(ctx context.Context) (map[string]v1.ValidatorGovInfo, error) {
 	currValidators := make(map[string]v1.ValidatorGovInfo)
-	if err := k.sk.IterateBondedValidatorsByPower(ctx, func(index int64, validator stakingtypes.ValidatorI) (stop bool) {
+	if err := k.sk.IterateValidators(ctx, func(index int64, validator stakingtypes.ValidatorI) (stop bool) {
+		// Filter 1: Must be bonded
+		if !validator.IsBonded() {
+			return false
+		}
+
+		// Filter 2: Must have non-zero bonded tokens
+		if validator.GetBondedTokens().IsZero() {
+			return false
+		}
+
+		// Filter 3: Must have non-zero delegator shares (Safety Check - prevents div by zero)
+		if validator.GetDelegatorShares().IsZero() {
+			return false
+		}
+
 		valBz, err := k.sk.ValidatorAddressCodec().StringToBytes(validator.GetOperator())
 		if err != nil {
 			return false

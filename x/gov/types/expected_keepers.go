@@ -24,6 +24,11 @@ type StakingKeeper interface {
 		context.Context, func(index int64, validator stakingtypes.ValidatorI) (stop bool),
 	) error
 
+	// iterate through all validators, execute func for each validator
+	IterateValidators(
+		context.Context, func(index int64, validator stakingtypes.ValidatorI) (stop bool),
+	) error
+
 	TotalBondedTokens(context.Context) (math.Int, error) // total bonded tokens within the validator set
 	IterateDelegations(
 		ctx context.Context, delegator sdk.AccAddress,

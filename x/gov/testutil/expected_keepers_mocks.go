@@ -1101,6 +1101,20 @@ func (mr *MockStakingKeeperMockRecorder) IterateDelegations(ctx, delegator, fn a
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IterateDelegations", reflect.TypeOf((*MockStakingKeeper)(nil).IterateDelegations), ctx, delegator, fn)
 }
 
+// IterateValidators mocks base method.
+func (m *MockStakingKeeper) IterateValidators(arg0 context.Context, arg1 func(int64, types1.ValidatorI) bool) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IterateValidators", arg0, arg1)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// IterateValidators indicates an expected call of IterateValidators.
+func (mr *MockStakingKeeperMockRecorder) IterateValidators(arg0, arg1 any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IterateValidators", reflect.TypeOf((*MockStakingKeeper)(nil).IterateValidators), arg0, arg1)
+}
+
 // TokensFromConsensusPower mocks base method.
 func (m *MockStakingKeeper) TokensFromConsensusPower(ctx context.Context, power int64) math.Int {
 	m.ctrl.T.Helper()
