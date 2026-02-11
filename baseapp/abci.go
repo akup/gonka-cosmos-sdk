@@ -946,9 +946,11 @@ func (app *BaseApp) Commit() (*abci.ResponseCommit, error) {
 	if ok {
 		rms.SetCommitHeader(header)
 	}
+	fmt.Fprintf(os.Stderr, "[APP_HASH_DEBUG] baseapp.Commit() about to call cms.Commit() cms_type=%T rootmulti_ok=%v\n", app.cms, ok)
 
 	app.cms.Commit()
 
+	fmt.Fprintf(os.Stderr, "[APP_HASH_DEBUG] baseapp.Commit() cms.Commit() returned\n")
 	// [APP_HASH_DEBUG] Log to stderr so it always appears (app.logger can be filtered by module/level).
 	if commitID := app.cms.LastCommitID(); len(commitID.Hash) > 0 {
 		fmt.Fprintf(os.Stderr, "[APP_HASH_DEBUG] baseapp.Commit() height=%d app_hash_hex=%X version=%d\n",

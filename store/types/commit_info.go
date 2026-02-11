@@ -32,6 +32,7 @@ func (ci CommitInfo) toMap() map[string][]byte {
 
 // Hash returns the simple merkle root hash of the stores sorted by name.
 func (ci CommitInfo) Hash() []byte {
+	fmt.Fprintf(os.Stderr, "[APP_HASH_DEBUG] CommitInfo.Hash() ENTERED version=%d num_store_infos=%d\n", ci.Version, len(ci.StoreInfos))
 	// we need a special case for empty set, as SimpleProofsFromMap requires at least one entry
 	if len(ci.StoreInfos) == 0 {
 		emptyHash := sha256.Sum256([]byte{})

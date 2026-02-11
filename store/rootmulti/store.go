@@ -466,8 +466,9 @@ func (rs *Store) LastCommitID() types.CommitID {
 	return rs.lastCommitInfo.CommitID()
 }
 
-// Commit implements Committer/CommitStore.
+// Commit implements Committer/CommitStore. Called from baseapp/abci.go app.cms.Commit().
 func (rs *Store) Commit() types.CommitID {
+	fmt.Fprintf(os.Stderr, "[APP_HASH_DEBUG] store/rootmulti.Commit() first line (called from baseapp)\n")
 	var previousHeight, version int64
 	if rs.lastCommitInfo.GetVersion() == 0 && rs.initialVersion > 1 {
 		// This case means that no commit has been made in the store, we
@@ -1179,6 +1180,7 @@ func GetLatestVersion(db dbm.DB) int64 {
 
 // Commits each store and returns a new commitInfo.
 func commitStores(version int64, storeMap map[types.StoreKey]types.CommitKVStore, removalMap map[types.StoreKey]bool) *types.CommitInfo {
+	fmt.Fprintf(os.Stderr, "[APP_HASH_DEBUG] commitStores() ENTERED version=%d num_stores=%d\n", version, len(storeMap))
 	storeInfos := make([]types.StoreInfo, 0, len(storeMap))
 	storeKeys := keysFromStoreKeyMap(storeMap)
 
