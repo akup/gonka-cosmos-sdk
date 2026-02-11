@@ -453,6 +453,18 @@ func (mr *MockStakingKeeperMockRecorder) ValidatorByConsAddr(arg0, arg1 any) *go
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ValidatorByConsAddr", reflect.TypeOf((*MockStakingKeeper)(nil).ValidatorByConsAddr), arg0, arg1)
 }
 
+// RestoreValidatorIndex mocks base method.
+func (m *MockStakingKeeper) RestoreValidatorIndex(arg0 context.Context) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "RestoreValidatorIndex", arg0)
+}
+
+// RestoreValidatorIndex indicates an expected call of RestoreValidatorIndex.
+func (mr *MockStakingKeeperMockRecorder) RestoreValidatorIndex(arg0 any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RestoreValidatorIndex", reflect.TypeOf((*MockStakingKeeper)(nil).RestoreValidatorIndex), arg0)
+}
+
 // MockStakingHooks is a mock of StakingHooks interface.
 type MockStakingHooks struct {
 	ctrl     *gomock.Controller

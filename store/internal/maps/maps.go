@@ -2,6 +2,8 @@ package maps
 
 import (
 	"encoding/binary"
+	"fmt"
+	"os"
 
 	"github.com/cometbft/cometbft/crypto/merkle"
 	"github.com/cometbft/cometbft/crypto/tmhash"
@@ -194,7 +196,12 @@ func ProofsFromMap(m map[string][]byte) ([]byte, map[string]*cmtprotocrypto.Proo
 	kvs := sm.Kvs
 	kvsBytes := make([][]byte, len(kvs.Pairs))
 	for i, kvp := range kvs.Pairs {
-		kvsBytes[i] = KVPair(kvp).Bytes()
+		leafBytes := KVPair(kvp).Bytes()
+		kvsBytes[i] = leafBytes
+		// [APP_HASH_DEBUG] EpochGroupData proof: leaf preimage for "inference" store (used in getEpochGroupDataByStoreKey / abciQueryWithProof).
+		if storeName := string(kvp.Key); storeName == "inference" {
+			fmt.Fprintf(os.Stderr, "[APP_HASH_DEBUG] ProofsFromMap inference store leaf_preimage_hex=%X (key=%q value_hash_len=%d)\n", leafBytes, storeName, len(kvp.Value))
+		}
 	}
 
 	rootHash, proofList := merkle.ProofsFromByteSlices(kvsBytes)

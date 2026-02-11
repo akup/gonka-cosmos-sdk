@@ -7,6 +7,7 @@ import (
 	"io"
 	"maps"
 	"math"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -486,9 +487,14 @@ func (rs *Store) Commit() types.CommitID {
 		rs.logger.Debug("commit header and version mismatch", "header_height", rs.commitHeader.Height, "version", version)
 	}
 
+	fmt.Fprintf(os.Stderr, "[APP_HASH_DEBUG] rootmulti.Commit() start version=%d\n", version)
+
 	rs.lastCommitInfo = commitStores(version, rs.stores, rs.removalMap)
 	rs.lastCommitInfo.Timestamp = rs.commitHeader.Time
 	defer rs.flushMetadata(rs.db, version, rs.lastCommitInfo)
+
+	appHash := rs.lastCommitInfo.Hash()
+	fmt.Fprintf(os.Stderr, "[APP_HASH_DEBUG] rootmulti.Commit() done version=%d app_hash_hex=%X\n", version, appHash)
 
 	// remove remnants of removed stores
 	for sk := range rs.removalMap {
@@ -1201,6 +1207,8 @@ func commitStores(version int64, storeMap map[types.StoreKey]types.CommitKVStore
 			si.Name = key.Name()
 			si.CommitId = commitID
 			storeInfos = append(storeInfos, si)
+			// [APP_HASH_DEBUG] Log each store's IAVL root for EpochGroupData proof debugging.
+			fmt.Fprintf(os.Stderr, "[APP_HASH_DEBUG] commitStores store name=%q version=%d iavl_root_hex=%X\n", si.Name, version, si.CommitId.Hash)
 		}
 	}
 

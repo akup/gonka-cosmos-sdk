@@ -2,6 +2,8 @@ package types
 
 import (
 	"crypto/sha256"
+	"fmt"
+	"os"
 
 	cmtprotocrypto "github.com/cometbft/cometbft/proto/tendermint/crypto"
 
@@ -36,13 +38,20 @@ func (ci CommitInfo) Hash() []byte {
 		return emptyHash[:]
 	}
 
-	rootHash, _, _ := maps.ProofsFromMap(ci.toMap())
+	m := ci.toMap()
+	// [APP_HASH_DEBUG] Log store name -> IAVL root map and final multistore root for EpochGroupData proof debugging.
+	for name, h := range m {
+		fmt.Fprintf(os.Stderr, "[APP_HASH_DEBUG] CommitInfo.Hash() store name=%q iavl_root_hex=%X\n", name, h)
+	}
+
+	rootHash, _, _ := maps.ProofsFromMap(m)
 
 	if len(rootHash) == 0 {
 		emptyHash := sha256.Sum256([]byte{})
 		return emptyHash[:]
 	}
 
+	fmt.Fprintf(os.Stderr, "[APP_HASH_DEBUG] CommitInfo.Hash() version=%d multistore_root_hex=%X\n", ci.Version, rootHash)
 	return rootHash
 }
 
