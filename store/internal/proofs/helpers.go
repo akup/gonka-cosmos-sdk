@@ -23,7 +23,7 @@ type SimpleResult struct {
 // returns a range proof and the root hash of the tree
 func GenerateRangeProof(size int, loc Where) *SimpleResult {
 	data := BuildMap(size)
-	root, proofs, allkeys := sdkmaps.ProofsFromMap(data)
+	root, proofs, allkeys := sdkmaps.ProofsFromMap(data, -1)
 
 	key := GetKey(allkeys, loc)
 	proof := proofs[key]
@@ -51,7 +51,7 @@ func SortedKeys(data map[string][]byte) []string {
 }
 
 func CalcRoot(data map[string][]byte) []byte {
-	root, _, _ := sdkmaps.ProofsFromMap(data)
+	root, _, _ := sdkmaps.ProofsFromMap(data, -1)
 	return root
 }
 

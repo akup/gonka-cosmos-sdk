@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
+	"sync"
 
 	"github.com/cometbft/cometbft/crypto/merkle"
 	"github.com/cometbft/cometbft/crypto/tmhash"
@@ -183,10 +184,18 @@ func HashFromMap(m map[string][]byte) []byte {
 	return mm.hash()
 }
 
+// lastProofsFromMapLoggedVersion tracks the last block version we emitted APP_HASH_DEBUG for,
+// so we log ProofsFromMap at most once per block.
+var (
+	lastProofsFromMapLoggedVersion int64 = -1
+	proofFromMapLogMu              sync.Mutex
+)
+
 // ProofsFromMap generates proofs from a map. The keys/values of the map will be used as the keys/values
 // in the underlying key-value pairs.
 // The keys are sorted before the proofs are computed.
-func ProofsFromMap(m map[string][]byte) ([]byte, map[string]*cmtprotocrypto.Proof, []string) {
+// logBlockVersion: when >= 0, APP_HASH_DEBUG is emitted at most once per version (once per block); when < 0, no APP_HASH_DEBUG.
+func ProofsFromMap(m map[string][]byte, logBlockVersion int64) ([]byte, map[string]*cmtprotocrypto.Proof, []string) {
 	sm := newSimpleMap()
 	for k, v := range m {
 		sm.Set(k, v)
@@ -195,12 +204,22 @@ func ProofsFromMap(m map[string][]byte) ([]byte, map[string]*cmtprotocrypto.Proo
 	sm.Sort()
 	kvs := sm.Kvs
 	kvsBytes := make([][]byte, len(kvs.Pairs))
+	shouldLog := false
+	if logBlockVersion >= 0 {
+		proofFromMapLogMu.Lock()
+		shouldLog = lastProofsFromMapLoggedVersion != logBlockVersion
+		if shouldLog {
+			lastProofsFromMapLoggedVersion = logBlockVersion
+		}
+		proofFromMapLogMu.Unlock()
+	}
 	for i, kvp := range kvs.Pairs {
 		leafBytes := KVPair(kvp).Bytes()
 		kvsBytes[i] = leafBytes
-		// [APP_HASH_DEBUG] EpochGroupData proof: leaf preimage for "inference" store (used in getEpochGroupDataByStoreKey / abciQueryWithProof).
-		if storeName := string(kvp.Key); storeName == "inference" {
-			fmt.Fprintf(os.Stderr, "[APP_HASH_DEBUG] ProofsFromMap inference store leaf_preimage_hex=%X (key=%q value_hash_len=%d)\n", leafBytes, storeName, len(kvp.Value))
+		if shouldLog {
+			if storeName := string(kvp.Key); storeName == "inference" {
+				fmt.Fprintf(os.Stderr, "[APP_HASH_DEBUG] ProofsFromMap inference store leaf_preimage_hex=%X (key=%q value_hash_len=%d)\n", leafBytes, storeName, len(kvp.Value))
+			}
 		}
 	}
 

@@ -45,7 +45,7 @@ func (ci CommitInfo) Hash() []byte {
 		fmt.Fprintf(os.Stderr, "[APP_HASH_DEBUG] CommitInfo.Hash() store name=%q iavl_root_hex=%X\n", name, h)
 	}
 
-	rootHash, _, _ := maps.ProofsFromMap(m)
+	rootHash, _, _ := maps.ProofsFromMap(m, ci.Version)
 
 	if len(rootHash) == 0 {
 		emptyHash := sha256.Sum256([]byte{})

@@ -148,7 +148,7 @@ func (op CommitmentOp) ProofOp() cmtprotocrypto.ProofOp {
 
 // ProofOpFromMap generates a single proof from a map and converts it to a ProofOp.
 func ProofOpFromMap(cmap map[string][]byte, storeName string) (ret cmtprotocrypto.ProofOp, err error) {
-	_, proofs, _ := sdkmaps.ProofsFromMap(cmap)
+	_, proofs, _ := sdkmaps.ProofsFromMap(cmap, -1)
 
 	proof := proofs[storeName]
 	if proof == nil {
