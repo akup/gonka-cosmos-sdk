@@ -4,10 +4,17 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"os"
+	"sync"
 
 	cmtprotocrypto "github.com/cometbft/cometbft/proto/tendermint/crypto"
 
 	"cosmossdk.io/store/internal/maps"
+)
+
+// lastCommitInfoHashLoggedVersion: APP_HASH_DEBUG for Hash() is emitted at most once per block.
+var (
+	lastCommitInfoHashLoggedVersion int64 = -1
+	commitInfoHashLogMu             sync.Mutex
 )
 
 // GetHash returns the GetHash from the CommitID.
@@ -32,7 +39,17 @@ func (ci CommitInfo) toMap() map[string][]byte {
 
 // Hash returns the simple merkle root hash of the stores sorted by name.
 func (ci CommitInfo) Hash() []byte {
-	fmt.Fprintf(os.Stderr, "[APP_HASH_DEBUG] CommitInfo.Hash() ENTERED version=%d num_store_infos=%d\n", ci.Version, len(ci.StoreInfos))
+	// [APP_HASH_DEBUG] Log at most once per block (per version).
+	commitInfoHashLogMu.Lock()
+	shouldLog := lastCommitInfoHashLoggedVersion != ci.Version
+	if shouldLog {
+		lastCommitInfoHashLoggedVersion = ci.Version
+	}
+	commitInfoHashLogMu.Unlock()
+
+	if shouldLog {
+		fmt.Fprintf(os.Stderr, "[APP_HASH_DEBUG] CommitInfo.Hash() ENTERED version=%d num_store_infos=%d\n", ci.Version, len(ci.StoreInfos))
+	}
 	// we need a special case for empty set, as SimpleProofsFromMap requires at least one entry
 	if len(ci.StoreInfos) == 0 {
 		emptyHash := sha256.Sum256([]byte{})
@@ -40,9 +57,10 @@ func (ci CommitInfo) Hash() []byte {
 	}
 
 	m := ci.toMap()
-	// [APP_HASH_DEBUG] Log store name -> IAVL root map and final multistore root for EpochGroupData proof debugging.
-	for name, h := range m {
-		fmt.Fprintf(os.Stderr, "[APP_HASH_DEBUG] CommitInfo.Hash() store name=%q iavl_root_hex=%X\n", name, h)
+	if shouldLog {
+		for name, h := range m {
+			fmt.Fprintf(os.Stderr, "[APP_HASH_DEBUG] CommitInfo.Hash() store name=%q iavl_root_hex=%X\n", name, h)
+		}
 	}
 
 	rootHash, _, _ := maps.ProofsFromMap(m, ci.Version)
@@ -52,7 +70,9 @@ func (ci CommitInfo) Hash() []byte {
 		return emptyHash[:]
 	}
 
-	fmt.Fprintf(os.Stderr, "[APP_HASH_DEBUG] CommitInfo.Hash() version=%d multistore_root_hex=%X\n", ci.Version, rootHash)
+	if shouldLog {
+		fmt.Fprintf(os.Stderr, "[APP_HASH_DEBUG] CommitInfo.Hash() version=%d multistore_root_hex=%X\n", ci.Version, rootHash)
+	}
 	return rootHash
 }
 

@@ -208,7 +208,6 @@ func ProofsFromMap(m map[string][]byte, logBlockVersion int64) ([]byte, map[stri
 	if logBlockVersion >= 0 {
 		proofFromMapLogMu.Lock()
 		shouldLog = lastProofsFromMapLoggedVersion != logBlockVersion
-		fmt.Fprintf(os.Stderr, "[APP_HASH_DEBUG] ProofsFromMap shouldLog=%v lastProofsFromMapLoggedVersion=%d logBlockVersion=%d\n", shouldLog, lastProofsFromMapLoggedVersion, logBlockVersion)
 		if shouldLog {
 			lastProofsFromMapLoggedVersion = logBlockVersion
 		}
