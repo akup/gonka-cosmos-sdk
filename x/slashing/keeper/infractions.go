@@ -3,6 +3,7 @@ package keeper
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/cockroachdb/errors"
 
@@ -33,10 +34,26 @@ func (k Keeper) HandleValidatorSignature(ctx context.Context, addr cryptotypes.A
 		return nil
 	}
 
-	// fetch signing info
+	// fetch signing info; if not found (e.g. after snapshot restore), create default and log
 	signInfo, err := k.GetValidatorSigningInfo(ctx, consAddr)
 	if err != nil {
-		return err
+		if errors.Is(err, types.ErrNoSigningInfoFound) {
+			logger.Info(
+				"validator has no signing info (e.g. after snapshot restore), creating default",
+				"validator_cons_addr", consAddr.String(),
+				"height", height,
+			)
+			signInfo = types.NewValidatorSigningInfo(
+				consAddr,
+				height,
+				0,
+				time.Unix(0, 0),
+				false,
+				0,
+			)
+		} else {
+			return err
+		}
 	}
 
 	signedBlocksWindow, err := k.SignedBlocksWindow(ctx)
