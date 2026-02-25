@@ -35,6 +35,27 @@ func BeginBlocker(ctx context.Context, k keeper.Keeper) error {
 		"count", len(expectedAddrs),
 	)
 
+	// Log all validators in staking (for debugging snapshot restoration and index/signing info)
+	allValidators, err := k.GetAllValidatorsFromStaking(ctx)
+	if err == nil {
+		allConsAddrs := make([]string, 0, len(allValidators))
+		for _, v := range allValidators {
+			consAddr, err := v.GetConsAddr()
+			if err != nil {
+				continue
+			}
+			allConsAddrs = append(allConsAddrs, fmt.Sprintf("%X", consAddr))
+		}
+		k.Logger(ctx).Info(
+			"all validators in staking (GetAllValidators)",
+			"height", sdkCtx.BlockHeight(),
+			"all_validator_cons_addrs", allConsAddrs,
+			"count", len(allConsAddrs),
+		)
+	}
+
+	// RestoreValidatorIndex repopulates staking's by-cons-addr and by-power indexes when they
+	// are missing (e.g. after snapshot restore), so that ValidatorByConsAddr and other lookups work.
 	k.RestoreValidatorIndex(ctx)
 	for _, voteInfo := range voteInfos {
 		err := k.HandleValidatorSignature(ctx, voteInfo.Validator.Address, voteInfo.Validator.Power, comet.BlockIDFlag(voteInfo.BlockIdFlag))

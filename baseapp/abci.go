@@ -2,6 +2,8 @@ package baseapp
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"sort"
@@ -849,12 +851,72 @@ func (app *BaseApp) internalFinalizeBlock(ctx context.Context, req *abci.Request
 	events = append(events, endBlock.Events...)
 	cp := app.GetConsensusParams(app.finalizeBlockState.Context())
 
-	return &abci.ResponseFinalizeBlock{
+	resp := &abci.ResponseFinalizeBlock{
 		Events:                events,
 		TxResults:             txResults,
 		ValidatorUpdates:      endBlock.ValidatorUpdates,
 		ConsensusParamUpdates: &cp,
-	}, nil
+	}
+
+	// Debug logging for LastResultsHash / ResponseFinalizeBlock comparison across binaries.
+	// LastResultsHash is derived from this response; log checksums to diff two runs on the same block.
+	app.logResponseFinalizeBlockDebug(req.Height, resp)
+
+	return resp, nil
+}
+
+// logResponseFinalizeBlockDebug logs checksums of ResponseFinalizeBlock for debugging
+// LastResultsHash differences across binary versions. Run two binaries on the same block,
+// capture logs, and diff these checksums to see which field (or tx index) differs.
+func (app *BaseApp) logResponseFinalizeBlockDebug(height int64, resp *abci.ResponseFinalizeBlock) {
+	if resp == nil {
+		return
+	}
+	// Full response hash (deterministic proto marshal)
+	fullBz, err := proto.Marshal(resp)
+	if err != nil {
+		app.logger.Debug("ResponseFinalizeBlock debug: marshal failed", "height", height, "err", err)
+		return
+	}
+	fullHash := sha256.Sum256(fullBz)
+	app.logger.Debug("ResponseFinalizeBlock(LastResultsHash input) debug",
+		"height", height,
+		"full_response_sha256_hex", hex.EncodeToString(fullHash[:]),
+		"tx_results_count", len(resp.TxResults),
+		"events_count", len(resp.Events),
+	)
+	// Per-tx checksums to pinpoint which tx and which part differs
+	for i, txRes := range resp.TxResults {
+		if txRes == nil {
+			app.logger.Debug("ResponseFinalizeBlock tx result debug", "height", height, "tx_index", i, "nil", true)
+			continue
+		}
+		dataHash := sha256.Sum256(txRes.Data)
+		logHash := sha256.Sum256([]byte(txRes.Log))
+		txResBz, _ := proto.Marshal(txRes)
+		txResHash := sha256.Sum256(txResBz)
+		app.logger.Debug("ResponseFinalizeBlock tx result debug",
+			"height", height,
+			"tx_index", i,
+			"code", txRes.Code,
+			"codespace", txRes.Codespace,
+			"gas_used", txRes.GasUsed,
+			"gas_wanted", txRes.GasWanted,
+			"tx_result_sha256_hex", hex.EncodeToString(txResHash[:]),
+			"data_sha256_hex", hex.EncodeToString(dataHash[:]),
+			"log_sha256_hex", hex.EncodeToString(logHash[:]),
+		)
+	}
+	// Block-level events checksum
+	if len(resp.Events) > 0 {
+		eventsBz, _ := proto.Marshal(&abci.ResponseFinalizeBlock{Events: resp.Events})
+		eventsHash := sha256.Sum256(eventsBz)
+		app.logger.Debug("ResponseFinalizeBlock block events debug",
+			"height", height,
+			"block_events_sha256_hex", hex.EncodeToString(eventsHash[:]),
+			"block_events_count", len(resp.Events),
+		)
+	}
 }
 
 // FinalizeBlock will execute the block proposal provided by RequestFinalizeBlock.

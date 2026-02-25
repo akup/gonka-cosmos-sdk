@@ -54,6 +54,11 @@ func (k Keeper) RestoreValidatorIndex(ctx context.Context) {
 	k.sk.RestoreValidatorIndex(ctx)
 }
 
+// GetAllValidatorsFromStaking returns all validators from the staking module (for logging/debugging).
+func (k Keeper) GetAllValidatorsFromStaking(ctx context.Context) ([]stakingtypes.Validator, error) {
+	return k.sk.GetAllValidators(ctx)
+}
+
 // AddPubkey sets a address-pubkey relation
 func (k Keeper) AddPubkey(ctx context.Context, pubkey cryptotypes.PubKey) error {
 	bz, err := k.cdc.MarshalInterface(pubkey)
